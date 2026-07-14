@@ -42,8 +42,8 @@ video-perceive = "video_perceive.perceive:main"
 vp = "video_perceive.perceive:main"
 
 [project.urls]
-Homepage = "https://github.com/PLACEHOLDER/video-perceive"
-Issues = "https://github.com/PLACEHOLDER/video-perceive/issues"
+Homepage = "https://github.com/isaac-ranger/video-perceive"
+Issues = "https://github.com/isaac-ranger/video-perceive/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

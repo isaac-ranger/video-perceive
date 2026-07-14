@@ -53,28 +53,28 @@ Channels stay separate. Words contextualize motion; do not blend unless you choo
 
 ### 0:35–0:40
 - **MOTION:** max_e=71.12 kind=JUMP_CUT mean_e=41.4 kinds={'JUMP_CUT': 6, 'LOCAL_MOVE': 4}
-- **SAID:** ♪ We're talking away ♪
-- **SAID:** ♪ I don't know what I'm to say ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
 
 ### 0:40–0:45
 - **MOTION:** max_e=52.53 kind=JUMP_CUT mean_e=13.8 kinds={'LOCAL_MOVE': 3, 'JUMP_CUT': 2, 'HOLD': 5}
-- **SAID:** ♪ I don't know what I'm to say ♪
-- **SAID:** ♪ I don't know what I'm to say ♪ ♪ I'll say it anyway ♪
-- **SAID:** ♪ I'll say it anyway ♪
-- **SAID:** ♪ Today's another day to find you ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
 
 ### 0:45–0:50
 - **MOTION:** max_e=63.47 kind=JUMP_CUT mean_e=20.8 kinds={'LOCAL_MOVE': 3, 'JUMP_CUT': 3, 'STIR': 4}
-- **SAID:** ♪ Today's another day to find you ♪
-- **SAID:** ♪ Today's another day to find you ♪ ♪ Shying away ♪
-- **SAID:** ♪ Shying away ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
 
 ### 0:50–0:55
 - **MOTION:** max_e=85.6 kind=JUMP_CUT mean_e=48.7 kinds={'LOCAL_MOVE': 4, 'JUMP_CUT': 6}
-- **SAID:** ♪ I'll be coming for your love, okay? ♪
-- **SAID:** ♪ I'll be coming for your love, okay? ♪ ♪ Take on me, take on me ♪
-- **SAID:** ♪ Take on me, take on me ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
+- **SAID:** ♪ [lyric redacted] ♪
 
 ### 0:55–1:00
 - **MOTION:** max_e=67.86 kind=JUMP_CUT mean_e=30.4 kinds={'LOCAL_MOVE': 3, 'JUMP_CUT': 4, 'STIR': 3}
-- **SAID:** ♪ Take on me, take on me ♪
+- **SAID:** ♪ [lyric redacted] ♪
