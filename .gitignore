@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tool workdirs / media (never commit copyrighted clips)
+*.mp4
+*.mkv
+*.webm
+*.mov
+perceive-out/
+**/frames/
+**/glances/
+**/motion/
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+
+# Hybrid page outputs in workdirs
+page.json
+page.png
+page.md
+
+# Captions / local residual (fixtures may opt-in under fixtures/)
+*.srt
+!fixtures/**/*.json
+!fixtures/**/*.md
+!fixtures/**/*.jsonl
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Secrets
+.env
+auth.json
+fixtures/synthetic/*.mp4

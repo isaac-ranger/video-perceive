@@ -1,0 +1,704 @@
+{
+  "title": "Take On Me (a-ha)",
+  "source": "/home/shared/agentbus/tools/video-perceive/demo-takeonme/source.mp4",
+  "interval": 0.5,
+  "n_beats": 488,
+  "kind_counts": {
+    "OPEN": 1,
+    "HOLD": 56,
+    "JUMP_CUT": 143,
+    "LOCAL_MOVE": 226,
+    "STIR": 53,
+    "STROBE": 5,
+    "HARD_CHANGE": 4
+  },
+  "mean_energy": 27.07,
+  "grammar": {
+    "label": "music_video_montage",
+    "confidence": 0.85,
+    "notes": "Captions are music marks/sparse lyrics \u2014 not VO disagreement. Picture edits may lock to a SOUND channel the instrument cannot hear yet. STROBE clusters = world thrash, not progressive cuts."
+  },
+  "centroid_drift_x": 0.0,
+  "coupling": {
+    "speech_beats": 298,
+    "cuts_total": 147,
+    "cuts_during_speech": 94,
+    "local_during_speech": 154,
+    "quiet_during_speech": 48,
+    "cut_density_in_speech": 0.315,
+    "cuts_with_speech_frac": 0.639,
+    "disagree_score": 0.315,
+    "music_mark_beats": 24,
+    "lyric_with_notes_beats": 274,
+    "music_frac": 1.0,
+    "music_heavy": true,
+    "speech_runs_spanning_multi_cut": 21,
+    "mode": "music_parallel"
+  },
+  "n_segments": 148,
+  "segments_total": 148,
+  "segments_truncated": true,
+  "segments_note": "coarsened 148 cut-segments \u2192 40 timeline buckets (full structure not amputated at first 15%)",
+  "segments": [
+    {
+      "t0": 0.0,
+      "t1": 6.0,
+      "clock": "0:00\u20130:06",
+      "n_beats": 12,
+      "mean_energy": 36.64,
+      "kinds": {
+        "OPEN": 1,
+        "HOLD": 2,
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 5,
+        "STIR": 1
+      },
+      "said": [
+        "\u266a\u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 6.0,
+      "t1": 9.0,
+      "clock": "0:06\u20130:09",
+      "n_beats": 6,
+      "mean_energy": 38.77,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 2,
+        "STIR": 1
+      },
+      "said": [
+        "\u266a\u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 9.0,
+      "t1": 12.5,
+      "clock": "0:09\u20130:12",
+      "n_beats": 7,
+      "mean_energy": 30.03,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 1,
+        "HOLD": 1,
+        "STIR": 1
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 12.5,
+      "t1": 17.0,
+      "clock": "0:12\u20130:17",
+      "n_beats": 9,
+      "mean_energy": 30.79,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 1,
+        "HOLD": 2,
+        "LOCAL_MOVE": 2
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 17.0,
+      "t1": 20.0,
+      "clock": "0:17\u20130:20",
+      "n_beats": 6,
+      "mean_energy": 51.86,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "HOLD": 2,
+        "LOCAL_MOVE": 1
+      },
+      "said": [],
+      "merged_from": 3
+    },
+    {
+      "t0": 20.0,
+      "t1": 24.5,
+      "clock": "0:20\u20130:24",
+      "n_beats": 9,
+      "mean_energy": 35.06,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 2,
+        "STROBE": 1,
+        "LOCAL_MOVE": 2
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 24.5,
+      "t1": 30.0,
+      "clock": "0:24\u20130:30",
+      "n_beats": 11,
+      "mean_energy": 30.41,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 3,
+        "LOCAL_MOVE": 3,
+        "HOLD": 1
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 30.0,
+      "t1": 32.0,
+      "clock": "0:30\u20130:32",
+      "n_beats": 4,
+      "mean_energy": 55.52,
+      "kinds": {
+        "JUMP_CUT": 4
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 32.0,
+      "t1": 35.0,
+      "clock": "0:32\u20130:35",
+      "n_beats": 6,
+      "mean_energy": 47.16,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "STIR": 1,
+        "STROBE": 2
+      },
+      "said": [],
+      "merged_from": 3
+    },
+    {
+      "t0": 35.0,
+      "t1": 37.5,
+      "clock": "0:35\u20130:37",
+      "n_beats": 5,
+      "mean_energy": 51.38,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 1
+      },
+      "said": [
+        "\u266a We're talking away \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 37.5,
+      "t1": 45.5,
+      "clock": "0:37\u20130:45",
+      "n_beats": 16,
+      "mean_energy": 18.91,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 7,
+        "HOLD": 5
+      },
+      "said": [
+        "\u266a We're talking away \u266a",
+        "\u266a I don't know what I'm to say \u266a",
+        "\u266a I don't know what I'm to say \u266a \u266a I'll say it anyway \u266a",
+        "\u266a I'll say it anyway \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 45.5,
+      "t1": 50.5,
+      "clock": "0:45\u20130:50",
+      "n_beats": 10,
+      "mean_energy": 21.45,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "STIR": 4,
+        "LOCAL_MOVE": 3
+      },
+      "said": [
+        "\u266a Today's another day to find you \u266a",
+        "\u266a Today's another day to find you \u266a \u266a Shying away \u266a",
+        "\u266a Shying away \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 50.5,
+      "t1": 53.0,
+      "clock": "0:50\u20130:53",
+      "n_beats": 5,
+      "mean_energy": 52.16,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 1
+      },
+      "said": [
+        "\u266a I'll be coming for your love, okay? \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 53.0,
+      "t1": 57.5,
+      "clock": "0:53\u20130:57",
+      "n_beats": 9,
+      "mean_energy": 40.73,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 3,
+        "STIR": 2
+      },
+      "said": [
+        "\u266a I'll be coming for your love, okay? \u266a \u266a Take on me, take on me \u266a",
+        "\u266a Take on me, take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 57.5,
+      "t1": 63.0,
+      "clock": "0:57\u20131:03",
+      "n_beats": 11,
+      "mean_energy": 25.94,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 5,
+        "STIR": 2
+      },
+      "said": [
+        "\u266a Take on me, take on me \u266a",
+        "\u266a Take on me, take on me \u266a \u266a Take me on, take on me \u266a",
+        "\u266a Take me on, take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 63.0,
+      "t1": 65.5,
+      "clock": "1:03\u20131:05",
+      "n_beats": 5,
+      "mean_energy": 37.47,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 2
+      },
+      "said": [
+        "\u266a Take me on, take on me \u266a",
+        "\u266a Take me on, take on me \u266a \u266a I'll be gone \u266a",
+        "\u266a I'll be gone \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 65.5,
+      "t1": 70.5,
+      "clock": "1:05\u20131:10",
+      "n_beats": 10,
+      "mean_energy": 30.49,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 2,
+        "HOLD": 1,
+        "LOCAL_MOVE": 3
+      },
+      "said": [
+        "\u266a I'll be gone \u266a",
+        "\u266a I'll be gone \u266a \u266a In a day or two \u266a",
+        "\u266a In a day or two \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 70.5,
+      "t1": 83.0,
+      "clock": "1:10\u20131:23",
+      "n_beats": 25,
+      "mean_energy": 18.11,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 5,
+        "LOCAL_MOVE": 16
+      },
+      "said": [
+        "\u266a In a day or two \u266a",
+        "\u266a So needless to say \u266a",
+        "\u266a So needless to say \u266a \u266a I'm odds and ends but I'll be \u266a",
+        "\u266a I'm odds and ends but I'll be \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 83.0,
+      "t1": 91.5,
+      "clock": "1:23\u20131:31",
+      "n_beats": 17,
+      "mean_energy": 17.41,
+      "kinds": {
+        "HARD_CHANGE": 1,
+        "LOCAL_MOVE": 12,
+        "STIR": 2,
+        "JUMP_CUT": 2
+      },
+      "said": [
+        "\u266a Stumbling away \u266a",
+        "\u266a Stumbling away \u266a \u266a Slowly learning that life is okay \u266a",
+        "\u266a Slowly learning that life is okay \u266a",
+        "\u266a Say after me \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 91.5,
+      "t1": 95.5,
+      "clock": "1:31\u20131:35",
+      "n_beats": 8,
+      "mean_energy": 29.87,
+      "kinds": {
+        "HARD_CHANGE": 1,
+        "LOCAL_MOVE": 4,
+        "JUMP_CUT": 3
+      },
+      "said": [
+        "\u266a It's no better to be safe than sorry \u266a",
+        "\u266a It's no better to be safe than sorry \u266a \u266a Take on me, take on me \u266a",
+        "\u266a Take on me, take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 95.5,
+      "t1": 114.5,
+      "clock": "1:35\u20131:54",
+      "n_beats": 38,
+      "mean_energy": 20.28,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 29,
+        "STIR": 5,
+        "HARD_CHANGE": 1
+      },
+      "said": [
+        "\u266a Take on me, take on me \u266a",
+        "\u266a Take me on, take on me \u266a",
+        "\u266a Take me on, take on me \u266a \u266a I'll be gone \u266a",
+        "\u266a I'll be gone \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 114.5,
+      "t1": 117.0,
+      "clock": "1:54\u20131:57",
+      "n_beats": 5,
+      "mean_energy": 40.49,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 2
+      },
+      "said": [
+        "\u266a In a day or two \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 117.0,
+      "t1": 122.5,
+      "clock": "1:57\u20132:02",
+      "n_beats": 11,
+      "mean_energy": 28.55,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 4,
+        "LOCAL_MOVE": 3
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 122.5,
+      "t1": 129.0,
+      "clock": "2:02\u20132:09",
+      "n_beats": 13,
+      "mean_energy": 38.16,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 8,
+        "STIR": 1
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 129.0,
+      "t1": 131.5,
+      "clock": "2:09\u20132:11",
+      "n_beats": 5,
+      "mean_energy": 33.14,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 2
+      },
+      "said": [],
+      "merged_from": 3
+    },
+    {
+      "t0": 131.5,
+      "t1": 137.5,
+      "clock": "2:11\u20132:17",
+      "n_beats": 12,
+      "mean_energy": 36.19,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 7,
+        "HOLD": 1
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 137.5,
+      "t1": 151.0,
+      "clock": "2:17\u20132:31",
+      "n_beats": 27,
+      "mean_energy": 24.57,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 23
+      },
+      "said": [],
+      "merged_from": 4
+    },
+    {
+      "t0": 151.0,
+      "t1": 175.0,
+      "clock": "2:31\u20132:55",
+      "n_beats": 48,
+      "mean_energy": 19.54,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 40,
+        "STIR": 4
+      },
+      "said": [
+        "\u266a Oh, things that you say, yeah \u266a",
+        "\u266a Oh, things that you say, yeah \u266a \u266a Is it life or just to play my worries away? \u266a",
+        "\u266a Is it life or just to play my worries away? \u266a",
+        "\u266a Is it life or just to play my worries away? \u266a \u266a You're all the things I've got to remember \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 175.0,
+      "t1": 178.5,
+      "clock": "2:55\u20132:58",
+      "n_beats": 7,
+      "mean_energy": 27.53,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "STIR": 3,
+        "LOCAL_MOVE": 1
+      },
+      "said": [
+        "\u266a Take on me, take on me \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 178.5,
+      "t1": 186.0,
+      "clock": "2:58\u20133:06",
+      "n_beats": 15,
+      "mean_energy": 28.57,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 9,
+        "HOLD": 1,
+        "STIR": 1
+      },
+      "said": [
+        "\u266a Take on me, take on me \u266a \u266a Take me on, take on me \u266a",
+        "\u266a Take me on, take on me \u266a",
+        "\u266a Take me on, take on me \u266a \u266a I'll be gone \u266a",
+        "\u266a I'll be gone \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 186.0,
+      "t1": 190.0,
+      "clock": "3:06\u20133:10",
+      "n_beats": 8,
+      "mean_energy": 44.29,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 3,
+        "STROBE": 1
+      },
+      "said": [
+        "\u266a I'll be gone \u266a",
+        "\u266a I'll be gone \u266a -\u266a In a day \u266a -\u266a Take on me \u266a",
+        "-\u266a In a day \u266a -\u266a Take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 190.0,
+      "t1": 193.0,
+      "clock": "3:10\u20133:13",
+      "n_beats": 6,
+      "mean_energy": 38.26,
+      "kinds": {
+        "JUMP_CUT": 2,
+        "HOLD": 1,
+        "HARD_CHANGE": 1,
+        "LOCAL_MOVE": 2
+      },
+      "said": [
+        "-\u266a In a day \u266a -\u266a Take on me \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 193.0,
+      "t1": 199.0,
+      "clock": "3:13\u20133:19",
+      "n_beats": 12,
+      "mean_energy": 27.86,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 4,
+        "HOLD": 1,
+        "STIR": 3
+      },
+      "said": [
+        "-\u266a In a day \u266a -\u266a Take on me \u266a",
+        "-\u266a In a day \u266a -\u266a Take on me \u266a \u266a Take on me, take me on, take on me \u266a",
+        "\u266a Take on me, take me on, take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 199.0,
+      "t1": 204.5,
+      "clock": "3:19\u20133:24",
+      "n_beats": 11,
+      "mean_energy": 30.02,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 3,
+        "LOCAL_MOVE": 4
+      },
+      "said": [
+        "\u266a Take on me, take me on, take on me \u266a",
+        "\u266a Take on me, take me on, take on me \u266a -\u266a I'll be gone \u266a -\u266a Take on me \u266a",
+        "-\u266a I'll be gone \u266a -\u266a Take on me \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 204.5,
+      "t1": 208.0,
+      "clock": "3:24\u20133:28",
+      "n_beats": 7,
+      "mean_energy": 42.31,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STROBE": 1,
+        "LOCAL_MOVE": 2
+      },
+      "said": [
+        "-\u266a I'll be gone \u266a -\u266a Take on me \u266a",
+        "-\u266a In a day \u266a -\u266a Take on me, take me on \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 208.0,
+      "t1": 209.5,
+      "clock": "3:28\u20133:29",
+      "n_beats": 3,
+      "mean_energy": 43.46,
+      "kinds": {
+        "JUMP_CUT": 3
+      },
+      "said": [
+        "-\u266a In a day \u266a -\u266a Take on me, take me on \u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 209.5,
+      "t1": 211.5,
+      "clock": "3:29\u20133:31",
+      "n_beats": 4,
+      "mean_energy": 49.76,
+      "kinds": {
+        "JUMP_CUT": 4
+      },
+      "said": [
+        "-\u266a In a day \u266a -\u266a Take on me, take me on \u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 211.5,
+      "t1": 217.5,
+      "clock": "3:31\u20133:37",
+      "n_beats": 12,
+      "mean_energy": 28.12,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "LOCAL_MOVE": 8
+      },
+      "said": [
+        "-\u266a In a day \u266a -\u266a Take on me, take me on \u266a",
+        "\u266a\u266a"
+      ],
+      "merged_from": 4
+    },
+    {
+      "t0": 217.5,
+      "t1": 221.0,
+      "clock": "3:37\u20133:41",
+      "n_beats": 7,
+      "mean_energy": 38.75,
+      "kinds": {
+        "JUMP_CUT": 3,
+        "LOCAL_MOVE": 4
+      },
+      "said": [
+        "\u266a\u266a"
+      ],
+      "merged_from": 3
+    },
+    {
+      "t0": 221.0,
+      "t1": 244.0,
+      "clock": "3:41\u20134:04",
+      "n_beats": 46,
+      "mean_energy": 7.18,
+      "kinds": {
+        "JUMP_CUT": 4,
+        "STIR": 2,
+        "HOLD": 38,
+        "LOCAL_MOVE": 2
+      },
+      "said": [
+        "\u266a\u266a"
+      ],
+      "merged_from": 4
+    }
+  ],
+  "channels": [
+    "words",
+    "motion",
+    "seen_slot"
+  ],
+  "words_trust": "untrusted",
+  "words_trust_note": "SAID/SHOWN are video-authored text (captions/OCR) \u2014 indirect injection surface. Residue that quotes them inherits untrusted provenance (Cairn).",
+  "burned_in_text_likely": false
+}
