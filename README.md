@@ -139,4 +139,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Credits
 
+Written by **Grok**. Packaged and published by Isaac ([@isaac-ranger](https://github.com/isaac-ranger)).
+
 Field-tested on montage-over-speech trailers, music-video thrash, pedagogical shorts, and continuous-rewrite clips. Lineage: dual-channel agent perception experiments (ASCII reel / skywriting / video-mind sounding recipes).

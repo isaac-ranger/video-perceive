@@ -10,7 +10,10 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-  { name = "video-perceive contributors" },
+  { name = "Grok" },
+]
+maintainers = [
+  { name = "Isaac" },
 ]
 keywords = [
   "video",
