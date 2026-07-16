@@ -11,8 +11,8 @@ Kinds separate *editing* from *acting* so jump-cut shorts don't read as dance.
 
 Usage:
   perceive.py <youtube-url-or-video> [--workdir DIR] [--interval SECONDS]
-  perceive.py walk <workdir> [--interesting] [--kinds JUMP_CUT,…] [--speech-disagreement]
-  perceive.py glance <workdir> --around N [--interval 0.1] [--radius 1.0]
+  perceive.py walk <workdir> [--interesting] [--rare-motion] [--kinds JUMP_CUT,…] [--speech-disagreement]
+  perceive.py glance <workdir> --around N|Ns|MM:SS [--interval 0.1] [--radius 1.0]
   perceive.py summary <workdir>
   perceive.py see <workdir> --beat N --note "…" [--which before|after|both]
   perceive.py seen <workdir> [--beat N]
@@ -220,14 +220,19 @@ def infer_grammar(
     coup_mode = coup.get("mode")
     strobes = kind_counts.get("STROBE", 0)
 
-    # pedagogical first when the body of the clip is quiet holds (studio lecture)
-    if quiet_r >= 0.45 and jumps + local >= 5 and mean_energy < 14 and drift < 0.12:
-        return {
-            "label": "pedagogical_pulse",
-            "confidence": 0.75,
-            "notes": "Quiet holds interleaved with motion spikes — demo/lecture gesture grammar. "
-                     "Speech labels the holds; cuts are secondary.",
-        }
+    # pedagogical first when the body of the clip is quiet holds (studio lecture /
+    # screencast). Modest centroid drift is common (PiP speaker, scroll, hands) and
+    # must not steal this label for travel/scene — only gate on drift when quiet is
+    # borderline. Field note: Matt Pocock JSON-token short YjPD9Alf1co (quiet≈0.83,
+    # drift≈0.14, one JUMP to IDE) was misread as trajectory under drift < 0.12.
+    if quiet_r >= 0.45 and jumps + local >= 5 and mean_energy < 14:
+        if quiet_r >= 0.60 or drift < 0.12:
+            return {
+                "label": "pedagogical_pulse",
+                "confidence": 0.75,
+                "notes": "Quiet holds interleaved with motion spikes — demo/lecture gesture grammar. "
+                         "Speech labels the holds; cuts are secondary.",
+            }
 
     # music video: lyrics/marks parallel to picture; often high edit rate + strobe
     if coup_mode == "music_parallel" and jumps + strobes >= 10:
@@ -803,6 +808,75 @@ def apply_fade_detection(motion: list[dict]) -> list[dict]:
     return motion
 
 
+def apply_paired_cut_merge(
+    motion: list[dict],
+    *,
+    energy_tol: float = 12.0,
+    sim_tol: float = 0.15,
+) -> list[dict]:
+    """Merge adjacent same-signature JUMP_CUT pairs into one edit (Isaac / La Jetée).
+
+    Dissolves and slow transitions often land as *two* adjacent JUMP_CUTs with
+    near-identical energy/sim (one transition straddling two samples). That
+    inflates cut counts ~2×. Keep the first as the edit event; demote the
+    second so segment boundaries and --interesting walks don't double-count.
+
+    Does not invent a new primary kind — first stays JUMP_CUT/HARD_CHANGE;
+    second becomes STIR with kind_alt pointing at the paired cut.
+    """
+    cut_kinds = {"JUMP_CUT", "HARD_CHANGE"}
+
+    def _sim(m: dict) -> float:
+        if m.get("frame_sim") is not None:
+            return float(m["frame_sim"])
+        if m.get("sim") is not None:
+            return float(m["sim"])
+        return 0.0
+
+    i = 0
+    while i < len(motion) - 1:
+        a, b = motion[i], motion[i + 1]
+        ka, kb = a.get("kind"), b.get("kind")
+        if ka not in cut_kinds or kb not in cut_kinds:
+            i += 1
+            continue
+        # Prefer consecutive beats (paired sample straddle)
+        try:
+            if int(b.get("beat", -99)) - int(a.get("beat", -99)) != 1:
+                i += 1
+                continue
+        except (TypeError, ValueError):
+            i += 1
+            continue
+        ea, eb = float(a.get("energy") or 0), float(b.get("energy") or 0)
+        sa, sb = _sim(a), _sim(b)
+        if abs(ea - eb) <= energy_tol and abs(sa - sb) <= sim_tol:
+            # Annotate first as head of pair
+            a["paired_cut"] = True
+            a["paired_with_beat"] = b.get("beat")
+            why_extra = (
+                f" | paired-cut head: next beat same signature "
+                f"(e={ea:.1f}/{eb:.1f} sim={sa:.3f}/{sb:.3f}) — one edit, two samples"
+            )
+            if why_extra not in (a.get("kind_why") or ""):
+                a["kind_why"] = (a.get("kind_why") or "") + why_extra
+            # Demote second so cut counts / segments don't double
+            b["kind_alt"] = kb
+            b["kind_alt_why"] = b.get("kind_why")
+            b["kind"] = "STIR"
+            b["kind_why"] = (
+                f"paired-cut tail of beat {a.get('beat')}: same-signature adjacent "
+                f"JUMP (eΔ={abs(ea-eb):.1f} simΔ={abs(sa-sb):.3f}) — not a second edit"
+            )
+            b["kind_confidence"] = 0.8
+            b["paired_cut_tail"] = True
+            b["paired_with_beat"] = a.get("beat")
+            i += 2  # don't triple-merge chains greedily from middle
+            continue
+        i += 1
+    return motion
+
+
 def apply_strobe_detection(
     motion: list[dict],
     frames: list[Path],
@@ -1017,6 +1091,7 @@ def build_channels(
         })
 
     motion_beats = apply_fade_detection(motion_beats)
+    motion_beats = apply_paired_cut_merge(motion_beats)
     motion_beats = apply_strobe_detection(motion_beats, frames, interval)
     # refresh index kinds after fade/strobe passes
     for row in index:
@@ -1200,6 +1275,50 @@ def interesting_beats(
         selected = sorted(selected, key=score, reverse=True)[:max_n]
         selected.sort()
     return selected
+
+
+def rare_motion_beats(
+    motion: list[dict],
+    *,
+    window: int = 12,
+    kinds: set[str] | None = None,
+    max_n: int | None = None,
+) -> list[int]:
+    """Rank motion-in-stillness (Isaac La Jetée note): LOCAL_MOVE/STIR in HOLD-dense neighborhoods.
+
+    Default --interesting is cut-biased. --rare-motion surfaces contextual rarity:
+    score = motion_energy * surrounding HOLD density (and a small bonus for LOCAL_MOVE).
+    """
+    if not motion:
+        return []
+    n = len(motion)
+    kinds = kinds or {"LOCAL_MOVE", "STIR"}
+    is_hold = [(m.get("kind") or "").upper() == "HOLD" for m in motion]
+
+    scored: list[tuple[float, int]] = []
+    for i, m in enumerate(motion):
+        kind = (m.get("kind") or "?").upper()
+        if kind not in kinds:
+            continue
+        lo = max(0, i - window)
+        hi = min(n, i + window + 1)
+        neigh = hi - lo - 1  # exclude self
+        if neigh <= 0:
+            hold_frac = 0.0
+        else:
+            hold_n = sum(1 for j in range(lo, hi) if j != i and is_hold[j])
+            hold_frac = hold_n / neigh
+        e = float(m.get("energy") or 0)
+        bonus = 1.5 if kind == "LOCAL_MOVE" else 1.0
+        score = (e + 0.1) * (0.15 + hold_frac) * bonus
+        scored.append((score, int(m["beat"])))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    if max_n is not None:
+        scored = scored[:max_n]
+    # walk in time order for reading
+    beats = sorted(b for _, b in scored)
+    return beats
 
 
 def render_md(
@@ -1531,21 +1650,30 @@ def cmd_walk(args: argparse.Namespace) -> None:
     if getattr(args, "kinds", None):
         kinds = {k.strip().upper() for k in args.kinds.split(",") if k.strip()}
 
+    use_rare = bool(getattr(args, "rare_motion", False))
     use_filter = bool(
         kinds
         or getattr(args, "interesting", False)
         or getattr(args, "speech_disagreement", False)
+        or use_rare
     )
 
     if use_filter:
-        indices = interesting_beats(
-            motion,
-            words,
-            kinds=kinds,
-            speech_disagreement=bool(args.speech_disagreement),
-            interesting=bool(args.interesting),
-            max_n=args.limit,
-        )
+        if use_rare:
+            indices = rare_motion_beats(
+                motion,
+                kinds=kinds,  # None → LOCAL_MOVE+STIR default
+                max_n=args.limit,
+            )
+        else:
+            indices = interesting_beats(
+                motion,
+                words,
+                kinds=kinds,
+                speech_disagreement=bool(args.speech_disagreement),
+                interesting=bool(args.interesting),
+                max_n=args.limit,
+            )
         if args.start is not None:
             indices = [i for i in indices if i >= args.start]
         if args.end is not None:
@@ -1555,7 +1683,8 @@ def cmd_walk(args: argparse.Namespace) -> None:
             return
         print(
             f"walk: {len(indices)} beats "
-            f"(interesting={bool(args.interesting)} kinds={kinds or '—'} "
+            f"(interesting={bool(args.interesting)} rare_motion={use_rare} "
+            f"kinds={kinds or '—'} "
             f"speech_disagreement={bool(args.speech_disagreement)})"
         )
     else:
@@ -1661,6 +1790,76 @@ def cmd_walk(args: argparse.Namespace) -> None:
     print(f"(cursor -> beat {last_i})")
 
 
+def parse_around_spec(spec: str) -> tuple[str, float | int]:
+    """Parse --around as beat index or time.
+
+    Returns ("beat", int) or ("time", seconds_float).
+
+    Accepted time forms (Isaac field note — avoid feeding seconds as beat index):
+      1285s  1285.5s  21:25  1:21:25  21m25s
+    Bare integers are beat indices (legacy).
+    """
+    s = (spec or "").strip()
+    if not s:
+        raise ValueError("empty --around")
+
+    # 21:25 or 1:21:25
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", s):
+        parts = [int(p) for p in s.split(":")]
+        if len(parts) == 2:
+            mm, ss = parts
+            return "time", float(mm * 60 + ss)
+        hh, mm, ss = parts
+        return "time", float(hh * 3600 + mm * 60 + ss)
+
+    # 21m25s / 1h2m3s / 90s
+    m = re.fullmatch(
+        r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m and any(m.groups()):
+        h = int(m.group(1) or 0)
+        mi = int(m.group(2) or 0)
+        sec = float(m.group(3) or 0)
+        return "time", h * 3600 + mi * 60 + sec
+
+    # bare number → beat index (legacy)
+    if re.fullmatch(r"-?\d+", s):
+        return "beat", int(s)
+
+    raise ValueError(
+        f"unrecognized --around {spec!r} "
+        "(use beat index N, or time like 1285s / 21:25 / 21m25s)"
+    )
+
+
+def resolve_around_beat(motion: list[dict], spec: str) -> tuple[int, str]:
+    """Map --around spec to beat index. Returns (beat, note)."""
+    kind, val = parse_around_spec(spec)
+    by_m = {int(m["beat"]): m for m in motion}
+    if kind == "beat":
+        beat = int(val)
+        if beat not in by_m:
+            raise SystemExit(f"glance: beat {beat} not found (0..{len(motion)-1})")
+        return beat, f"beat {beat}"
+
+    target_t = float(val)
+    # nearest beat by absolute time distance
+    best = None
+    best_d = None
+    for m in motion:
+        t = float(m.get("t") or 0)
+        d = abs(t - target_t)
+        if best is None or d < best_d:
+            best = int(m["beat"])
+            best_d = d
+    if best is None:
+        raise SystemExit("glance: empty motion.jsonl")
+    note = f"t={target_t:.3f}s → nearest beat {best} (Δ{best_d:.3f}s)"
+    return best, note
+
+
 def cmd_glance(args: argparse.Namespace) -> None:
     """Re-sample a local time window at finer interval (directed glance).
 
@@ -1678,9 +1877,15 @@ def cmd_glance(args: argparse.Namespace) -> None:
         sys.exit("glance: run perceive first (no motion.jsonl)")
 
     motion = [json.loads(l) for l in motion_path.read_text().splitlines() if l]
+    around_beat, around_note = resolve_around_beat(motion, str(args.around))
     by_m = {int(m["beat"]): m for m in motion}
-    if args.around not in by_m:
-        sys.exit(f"glance: beat {args.around} not found (0..{len(motion)-1})")
+    if around_beat not in by_m:
+        sys.exit(f"glance: beat {around_beat} not found (0..{len(motion)-1})")
+
+    # Keep rest of glance code on args.around as int beat
+    args.around = around_beat
+    if around_note.startswith("t="):
+        print(f"glance: resolved --around → {around_note}")
 
     anchor = by_m[args.around]
     t_center = float(anchor.get("t") or 0)
@@ -1785,6 +1990,7 @@ def cmd_glance(args: argparse.Namespace) -> None:
         prev_energy = float(stats.get("energy", 0))
 
     fine_motion = apply_fade_detection(fine_motion)
+    fine_motion = apply_paired_cut_merge(fine_motion)
     fine_motion = apply_strobe_detection(fine_motion, frames, fine_iv)
     write_jsonl(gdir / "motion.jsonl", fine_motion)
     kinds = Counter(m.get("kind", "?") for m in fine_motion)
@@ -2071,6 +2277,14 @@ def main() -> None:
             help="cuts, energy peaks, speech-disagreement, low-confidence kinds",
         )
         ap.add_argument(
+            "--rare-motion",
+            action="store_true",
+            help=(
+                "motion-in-stillness: rank LOCAL_MOVE/STIR by surrounding HOLD density "
+                "(not cut-biased; Isaac La Jetée field note)"
+            ),
+        )
+        ap.add_argument(
             "--speech-disagreement",
             action="store_true",
             help="beats where speech co-occurs with JUMP_CUT/HARD_CHANGE",
@@ -2113,9 +2327,11 @@ def main() -> None:
         ap.add_argument("workdir")
         ap.add_argument(
             "--around",
-            type=int,
             required=True,
-            help="parent beat index to center the glance on",
+            help=(
+                "parent beat index OR time: N | Ns | MM:SS | H:MM:SS | 21m25s "
+                "(time resolves to nearest beat)"
+            ),
         )
         ap.add_argument(
             "--interval",

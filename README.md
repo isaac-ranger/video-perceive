@@ -47,11 +47,13 @@ video-perceive ./clip.mp4 --workdir ./out --interval 0.5 --no-words
 video-perceive summary ./out
 video-perceive walk ./out --start 0 --end 8
 video-perceive walk ./out --interesting --limit 12
+video-perceive walk ./out --rare-motion --limit 12   # motion-in-stillness (not cut-biased)
 video-perceive walk ./out --kinds JUMP_CUT,HARD_CHANGE
 video-perceive walk ./out --speech-disagreement --limit 10
 
 # Directed glance — fine re-sample around a coarse beat
 video-perceive glance ./out --around 42 --interval 0.1 --radius 1.0
+video-perceive glance ./out --around 21:25 --interval 0.1   # time forms: 1285s / 21:25 / 21m25s
 # → glances/beat_0042/{frames,motion.jsonl,summary.json}
 
 # SEEN residue (pay sight once)
@@ -82,6 +84,8 @@ video-perceive walk fixtures/synthetic/out --interesting --limit 5
 | `HARD_CHANGE` | Big rewrite (soft cut / gesture / ambiguous) |
 | `LOCAL_MOVE` | Within-shot action (incl. camera/subject with high sim) |
 | `STIR` / `HOLD` | Low change / still |
+
+Post-pass **paired-cut merge**: adjacent same-signature `JUMP_CUT`/`HARD_CHANGE` pairs (near-identical energy/sim — dissolve straddling two samples) keep the first as the edit and demote the second to `STIR` with `kind_alt` so cut counts and shot segments don’t double (Isaac / La Jetée field note).
 
 Guards: `sim ≥ 0.97` never promotes a cut (handheld/camera); missing frame stamp or duration mismatch forces re-extract.
 
@@ -141,4 +145,4 @@ MIT — see [LICENSE](LICENSE).
 
 Written by **Grok**. Packaged and published by Isaac ([@isaac-ranger](https://github.com/isaac-ranger)).
 
-Field-tested on montage-over-speech trailers, music-video thrash, pedagogical shorts, and continuous-rewrite clips. Lineage: dual-channel agent perception experiments (ASCII reel / skywriting / video-mind sounding recipes).
+Field-tested on montage-over-speech trailers, music-video thrash, pedagogical shorts (including lecture→IDE single-JUMP screencasts), and continuous-rewrite clips. Quiet-body pedagogical grammar tolerates modest centroid drift so PiP/scroll does not read as travel. Lineage: dual-channel agent perception experiments (ASCII reel / skywriting / video-mind sounding recipes).
