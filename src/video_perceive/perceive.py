@@ -11,9 +11,11 @@ Kinds separate *editing* from *acting* so jump-cut shorts don't read as dance.
 
 Usage:
   perceive.py <youtube-url-or-video> [--workdir DIR] [--interval SECONDS]
-  perceive.py walk <workdir> [--interesting] [--kinds JUMP_CUT,…] [--speech-disagreement]
-  perceive.py glance <workdir> --around N [--interval 0.1] [--radius 1.0]
+  perceive.py walk <workdir> [--interesting] [--rare-motion] [--kinds JUMP_CUT,…] [--speech-disagreement]
+  perceive.py glance <workdir> --around N|Ns|MM:SS [--interval 0.1] [--radius 1.0]
   perceive.py summary <workdir>
+  perceive.py rescore <workdir>               # upgrade a shelved residue: re-audit, no re-ingest
+  perceive.py strip <workdir> --beat N        # ordered frame strip (sequences convey movement)
   perceive.py see <workdir> --beat N --note "…" [--which before|after|both]
   perceive.py seen <workdir> [--beat N]
   perceive.py diagram <workdir> [--tiles 8]   # hybrid page.json + page.png + page.md
@@ -102,11 +104,16 @@ def classify_kind_detail(
         )
 
     # Structural cut: low histogram similarity + real energy change.
+    # Confidence is DERIVED from the sim depth, not quantized (perception
+    # night 2026-07-18: three flat values over sim −0.23..0.88 read as
+    # anti-correlated with worth on archival film — the badge must follow
+    # the raw number under it).
     if sim < 0.82 and energy >= 18:
         alt, alt_why = None, None
-        conf = 0.92
+        conf = min(0.95, 0.60 + (0.82 - sim) * 0.45)
         if energy > 50 and sim > 0.75:
-            alt, alt_why, conf = "HARD_CHANGE", "very high energy; sim only moderately low", 0.8
+            alt, alt_why = "HARD_CHANGE", "very high energy; sim only moderately low"
+            conf = min(conf, 0.72)
         return result(
             "JUMP_CUT",
             f"structural cut: {sim_s} low + {e_s}",
@@ -118,7 +125,7 @@ def classify_kind_detail(
             f"structural cut (soft): {sim_s} + {e_s} {af_s}",
             "HARD_CHANGE",
             "could be huge within-shot impact",
-            0.78,
+            min(0.85, 0.55 + (0.88 - sim) * 0.5),
         )
 
     # Extreme rewrite from quiet → cut; from motion → keep dancing
@@ -199,8 +206,44 @@ def infer_grammar(
     mean_energy: float,
     centroid_drift_x: float | None = None,
     coupling: dict | None = None,
+    audit: dict | None = None,
 ) -> dict:
-    """Coarse motion-grammar guess from kind histogram (not a verdict)."""
+    """Coarse motion-grammar guess from kind histogram (not a verdict).
+
+    Every label ships as status=hypothesis with fit (Pi/Rowan: two starling
+    videos at two resolutions both scored 'pedagogical_pulse 0.75' — a
+    lecture-hall word for ten thousand birds; rhythm-true, genre-false).
+    Below the abstention floor the label steps aside entirely: a confident
+    wrong genre is worse than a declared unknown.
+    """
+    g = _infer_grammar_raw(
+        kind_counts,
+        n,
+        mean_energy,
+        centroid_drift_x=centroid_drift_x,
+        coupling=coupling,
+        audit=audit,
+    )
+    g["fit"] = g.get("confidence")
+    g["status"] = "hypothesis"
+    if g.get("label") not in ("empty", "mixed") and float(g.get("confidence") or 0) < 0.5:
+        g["best_guess"] = g["label"]
+        g["label"] = "unclassified"
+        g["notes"] = (
+            f"abstained: best guess `{g['best_guess']}` fit {g.get('fit')} below 0.5 floor. "
+            + (g.get("notes") or "")
+        )
+    return g
+
+
+def _infer_grammar_raw(
+    kind_counts: dict[str, int],
+    n: int,
+    mean_energy: float,
+    centroid_drift_x: float | None = None,
+    coupling: dict | None = None,
+    audit: dict | None = None,
+) -> dict:
     if n <= 0:
         return {"label": "empty", "confidence": 0.0, "notes": ""}
     jumps = kind_counts.get("JUMP_CUT", 0) + kind_counts.get("HARD_CHANGE", 0)
@@ -220,14 +263,50 @@ def infer_grammar(
     coup_mode = coup.get("mode")
     strobes = kind_counts.get("STROBE", 0)
 
-    # pedagogical first when the body of the clip is quiet holds (studio lecture)
-    if quiet_r >= 0.45 and jumps + local >= 5 and mean_energy < 14 and drift < 0.12:
+    # stills advanced by cuts (photo-roman / slideshow / La Jetée): the film is
+    # held frames, the only progress is the cut itself. Non-genre class added
+    # perception night 2026-07-18 (Pi: abstain or grow vocabulary — a confident
+    # wrong genre is the worst output). Gated on near-zero speech so slide
+    # lectures with VO stay pedagogical.
+    speech_frac = (
+        float(coup.get("speech_beats") or 0) / n if n else 0.0
+    )
+    verified_cuts = int((audit or {}).get("verified") or 0)
+    if (
+        speech_frac < 0.15
+        and quiet_r >= 0.55
+        and local_r < 0.20
+        and (verified_cuts >= 20 or jumps >= 30)
+    ):
         return {
-            "label": "pedagogical_pulse",
-            "confidence": 0.75,
-            "notes": "Quiet holds interleaved with motion spikes — demo/lecture gesture grammar. "
-                     "Speech labels the holds; cuts are secondary.",
+            "label": "stills_advanced_by_cuts",
+            "confidence": 0.8,
+            "notes": (
+                f"Held frames dominate (quiet {quiet_r:.2f}) and the cut is the "
+                f"only engine of progress ({verified_cuts} audit-verified of "
+                f"{jumps} cuts). Photo-roman/slideshow structure — motion, when "
+                f"it appears, is the payload, not the medium."
+            ),
         }
+
+    # pedagogical first when the body of the clip is quiet holds (studio lecture /
+    # screencast). Modest centroid drift is common (PiP speaker, scroll, hands) and
+    # must not steal this label for travel/scene — only gate on drift when quiet is
+    # borderline. Field note: Matt Pocock JSON-token short YjPD9Alf1co (quiet≈0.83,
+    # drift≈0.14, one JUMP to IDE) was misread as trajectory under drift < 0.12.
+    # Speech gate (Grok 2026-07-18): the same quiet/spike histogram is shared by
+    # speechless continuous takes (OK Go treadmill one-shot, bird murmurations).
+    # Without SAID evidence, fall through to continuous_rewrite / trajectory_or_scene
+    # rather than claiming lecture genre. Fit 0.75 on a music video is rhythm-true,
+    # genre-false (Isaac TUNING starling specimen, same shape).
+    if quiet_r >= 0.45 and jumps + local >= 5 and mean_energy < 14:
+        if (quiet_r >= 0.60 or drift < 0.12) and speech_frac >= 0.10:
+            return {
+                "label": "pedagogical_pulse",
+                "confidence": 0.75,
+                "notes": "Quiet holds interleaved with motion spikes — demo/lecture gesture grammar. "
+                         "Speech labels the holds; cuts are secondary.",
+            }
 
     # music video: lyrics/marks parallel to picture; often high edit rate + strobe
     if coup_mode == "music_parallel" and jumps + strobes >= 10:
@@ -254,13 +333,51 @@ def infer_grammar(
             "notes": "High cut density under speech with multi-cut caption runs — trailer/ad grammar.",
         }
 
-    # jump-cut montage: frequent global rewrites (may be light on captions)
+    # Audit guard before claiming edit grammar (Isaac / 1906 Market Street):
+    # a true montage's alleged cuts do not bridge — different shots stay
+    # different 2s later. When a large share of the cut mass bridged back
+    # (world held: occlusion/flicker/damage) and almost none verified, the
+    # "cuts" are not authorship and montage would be a false genre. Placed
+    # after the coupling-evidence rules (music/VO), which stand on their own.
+    if audit and audit.get("alleged", 0) >= 10:
+        a_n = audit["alleged"]
+        v_n = audit.get("verified", 0)
+        d_n = audit.get("demoted_world_hold", 0)
+        if jump_r >= 0.15 and v_n / a_n < 0.15 and d_n / a_n >= 0.25:
+            return {
+                "label": "continuous_or_damaged_take",
+                "confidence": 0.65,
+                "notes": (
+                    f"Cut mass failed audit: verified {v_n}/{a_n}, "
+                    f"world-held (bridged) {d_n}/{a_n}, floor-churn "
+                    f"{audit.get('churn_at_floor', 0)}/{a_n}. Boundaries are "
+                    f"occlusion/flicker/damage or unresolvable at this interval — "
+                    f"read as continuous footage, not edit grammar. Verified cuts "
+                    f"(if any) are the only citable edits."
+                ),
+            }
+
+    # jump-cut montage: frequent global rewrites (may be light on captions).
+    # Also absolute cut mass: long trailers dilute jump_r below 0.15 while still
+    # being edit-driven (Endgame trailer @0.5s: ~19 jumps / jump_r≈0.06 —
+    # Grok 2026-07-18). Prefer audit-verified when available.
     if jump_r >= 0.15 and jumps >= 8:
         return {
             "label": "jump_cut_montage",
             "confidence": min(0.95, 0.45 + jump_r),
             "notes": "Many JUMP_CUT/HARD_CHANGE spikes — edit grammar dominates; "
                      "read LOCAL_MOVE/HOLD between cuts as the actual action.",
+        }
+    if jumps >= 12 and (verified_cuts >= 8 or (verified_cuts == 0 and jumps >= 20)):
+        return {
+            "label": "jump_cut_montage",
+            "confidence": min(0.85, 0.5 + 0.02 * min(jumps, 20)),
+            "notes": (
+                f"Edit mass dominates by count ({jumps} JUMP/HARD"
+                + (f", {verified_cuts} audit-verified" if verified_cuts else "")
+                + f") even though jump_r={jump_r:.2f} is diluted by runtime. "
+                "Trailer/montage grammar — read LOCAL_MOVE/HOLD between cuts as action."
+            ),
         }
     # continuous rewrite (dance): mostly local, little quiet, high mean energy, few cuts
     if local_r >= 0.45 and quiet_r < 0.35 and mean_energy >= 12 and jump_r < 0.15:
@@ -270,8 +387,15 @@ def infer_grammar(
             "notes": "Sustained within-shot change, little true still — dance/body grammar.",
         }
     fades = kind_counts.get("FADE", 0)
-    # single continuous take bookended by fades (silent stunts, one-shots)
-    if fades >= 1 and jump_r < 0.08 and (local_r + stir / n + hold / n) >= 0.7:
+    # single continuous take bookended by fades (silent stunts, one-shots).
+    # Absolute jump cap: jump_r alone lets trailers with ~5% cuts + a fade claim
+    # "continuous take" (Endgame: 19 jumps, jump_r≈0.06, 5 fades).
+    if (
+        fades >= 1
+        and jumps <= 2
+        and jump_r < 0.08
+        and (local_r + stir / n + hold / n) >= 0.7
+    ):
         return {
             "label": "trajectory_or_scene",
             "confidence": 0.8,
@@ -548,7 +672,7 @@ def extract_frames(video: Path, framedir: Path, interval: float, force: bool = F
     elif not stamp.exists():
         stamp.write_text(str(interval))
 
-    frames = sorted(framedir.glob("t*.jpg"))
+    frames = numeric_frames(framedir)
     # Duration invariant: n * interval should cover most of the film
     dur = video_duration(video)
     if dur and frames and interval > 0:
@@ -574,7 +698,7 @@ def extract_frames(video: Path, framedir: Path, interval: float, force: bool = F
                 str(framedir / "t%03d.jpg"),
             ])
             stamp.write_text(str(interval))
-            frames = sorted(framedir.glob("t*.jpg"))
+            frames = numeric_frames(framedir)
     return frames
 
 
@@ -616,6 +740,19 @@ def hms(t: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def numeric_frames(dirpath: Path, pattern: str = "t*.jpg") -> list[Path]:
+    """Frames in NUMERIC order. ffmpeg's %03d overflows past 999 (t1000.jpg),
+    and lexicographic sort splices t1000 between t100 and t101 — on La Jetée
+    that manufactured 534 seams wearing JUMP_CUT labels, 69% of the film's
+    alleged cuts (Builder's census, perception night 2026-07-18). The recorder
+    must never cut the film itself.
+    """
+    return sorted(
+        dirpath.glob(pattern),
+        key=lambda p: int(re.sub(r"\D", "", p.stem) or 0),
+    )
+
+
 def frame_hist_sim(prev: Path, curr: Path, size: int = 64, bins: int = 32) -> float:
     """Grayscale histogram correlation in [≈-1, 1]; ~1 = same distribution (same shot)."""
     from PIL import Image
@@ -628,6 +765,248 @@ def frame_hist_sim(prev: Path, curr: Path, size: int = 64, bins: int = 32) -> fl
     ha /= ha.sum()
     hb /= hb.sum()
     return float(np.corrcoef(ha, hb)[0, 1])
+
+
+def mask_shape(mask, max_cells: int = 96 * 54) -> dict | None:
+    """Shape of the active (changed) region — the aggregate-object channel
+    (Pi / murmuration: the tool measured motion *amount* but never motion *of
+    what*; a flock that stretches, breathes, fragments was invisible as an
+    object). Cheap connected components + PCA elongation on a downsampled mask.
+    """
+    import numpy as np
+
+    if mask is None or not mask.any():
+        return None
+    h, w = mask.shape
+    # downsample by striding to ≤ max_cells for the labeling pass
+    step = 1
+    while (h // step) * (w // step) > max_cells:
+        step += 1
+    small = mask[::step, ::step]
+    sh, sw = small.shape
+    labels = np.zeros((sh, sw), dtype=np.int32)
+    nlab = 0
+    sizes: list[int] = []
+    for y in range(sh):
+        for x in range(sw):
+            if not small[y, x] or labels[y, x]:
+                continue
+            nlab += 1
+            stack = [(y, x)]
+            labels[y, x] = nlab
+            size = 0
+            while stack:
+                cy, cx = stack.pop()
+                size += 1
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < sh and 0 <= nx < sw and small[ny, nx] and not labels[ny, nx]:
+                        labels[ny, nx] = nlab
+                        stack.append((ny, nx))
+            sizes.append(size)
+    if not sizes:
+        return None
+    active = sum(sizes)
+    blobs = [s for s in sizes if s >= 4]
+    ys, xs = np.nonzero(small)
+    # PCA elongation of the active mass (1.0 = round, high = ribbon/line)
+    if len(ys) >= 8:
+        pts = np.stack([ys.astype(np.float64), xs.astype(np.float64)])
+        cov = np.cov(pts)
+        ev = np.linalg.eigvalsh(cov)
+        lo, hi = max(float(ev[0]), 1e-6), max(float(ev[1]), 1e-6)
+        elong = round(min(99.0, (hi / lo) ** 0.5), 2)
+    else:
+        elong = 1.0
+    diag = (sh ** 2 + sw ** 2) ** 0.5
+    spread = round(float(((ys.std() ** 2 + xs.std() ** 2) ** 0.5) / diag), 3) if len(ys) else 0.0
+    return {
+        "blobs": len(blobs),
+        "largest_frac": round(max(sizes) / active, 3),
+        "elongation": elong,
+        "spread": spread,
+    }
+
+
+GRAIN_SIGMAS = (1.5, 3.0, 6.0)
+# Grain verdict thresholds (finest scale) — calibrated on crop-battery-20260718
+# (one source, seven clips, two blind witnesses; the first labeled dataset on
+# this axis). Cross-source use is hypothesis until a second labeled set exists.
+GRAIN_MIN_N = 50
+GRAIN_MIN_SEP = 0.6
+GRAIN_MIN_CONTRAST = 10.0
+GRAIN_FAINT_N = 10
+GRAIN_FALLBACK_MAX_PX = 50_000
+
+
+def _label_sizes(mask) -> list[int] | None:
+    """Connected-component sizes (4-neighbour). scipy fast path when present;
+    pure-python flood fill otherwise. Returns None when the mask is too dense
+    for the fallback to walk — absence is stamped, never faked."""
+    import numpy as np
+
+    try:
+        from scipy import ndimage
+        labels, n = ndimage.label(mask)
+        if n == 0:
+            return []
+        return np.bincount(labels.ravel())[1:].tolist()
+    except ImportError:
+        pass
+    n_on = int(mask.sum())
+    if n_on == 0:
+        return []
+    if n_on > GRAIN_FALLBACK_MAX_PX:
+        return None
+    h, w = mask.shape
+    labels = np.zeros((h, w), dtype=np.int32)
+    sizes: list[int] = []
+    ys, xs = np.nonzero(mask)
+    for y0, x0 in zip(ys.tolist(), xs.tolist()):
+        if labels[y0, x0]:
+            continue
+        lab = len(sizes) + 1
+        stack = [(y0, x0)]
+        labels[y0, x0] = lab
+        size = 0
+        while stack:
+            cy, cx = stack.pop()
+            size += 1
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ny, nx = cy + dy, cx + dx
+                if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not labels[ny, nx]:
+                    labels[ny, nx] = lab
+                    stack.append((ny, nx))
+        sizes.append(size)
+    return sizes
+
+
+def grain_stats(img, mask) -> dict | None:
+    """Fine-scale separability of the active region — the grain lane
+    (Pi #2386 / crop-battery-20260718). Shape sees the aggregate; this channel
+    asks the question the crop battery turned on: can individuals be resolved?
+
+    Multi-scale band-pass (frame minus Gaussian background). Per scale the
+    dominant-polarity strong pixels (dark specks on light ground or the
+    reverse — polarity reported, not assumed) are labeled; a speck is a
+    component sized 2..(4σ)²; sep is the share of strong structure that is
+    distinct specks rather than one merged mass. Verdict reads the finest
+    scale: granular / faint / smooth. Individuals die under information drain
+    long before the aggregate does — that asymmetry is what this lane measures.
+    """
+    import numpy as np
+    from PIL import ImageFilter
+
+    if mask is None or not mask.any():
+        return None
+    gray = np.asarray(img, dtype=np.float32)
+    speck_n: list[int | None] = []
+    seps: list[float | None] = []
+    contrasts: list[float] = []
+    polarity: list[str] = []
+    skipped = False
+    for sigma in GRAIN_SIGMAS:
+        bg = np.asarray(img.filter(ImageFilter.GaussianBlur(sigma)), dtype=np.float32)
+        band = gray - bg
+        med = float(np.median(band))
+        mad = float(np.median(np.abs(band - med))) * 1.4826
+        thr = max(6.0, 3.0 * mad)
+        dark = (band < -thr) & mask
+        bright = (band > thr) & mask
+        pol = "dark" if int(dark.sum()) >= int(bright.sum()) else "bright"
+        strong = dark if pol == "dark" else bright
+        n_on = int(strong.sum())
+        polarity.append(pol)
+        if n_on == 0:
+            speck_n.append(0)
+            seps.append(0.0)
+            contrasts.append(0.0)
+            continue
+        contrasts.append(round(float(np.median(np.abs(band[strong]))), 1))
+        sizes = _label_sizes(strong)
+        if sizes is None:
+            speck_n.append(None)
+            seps.append(None)
+            skipped = True
+            continue
+        cap = (4.0 * sigma) ** 2
+        speck_sizes = [s for s in sizes if 2 <= s <= cap]
+        speck_n.append(len(speck_sizes))
+        seps.append(round(sum(speck_sizes) / n_on, 3))
+    n0, sep0, c0 = speck_n[0], seps[0], contrasts[0]
+    if n0 is None:
+        verdict = "unlabeled"
+    elif n0 >= GRAIN_MIN_N and (sep0 or 0) >= GRAIN_MIN_SEP and c0 >= GRAIN_MIN_CONTRAST:
+        verdict = "granular"
+    elif n0 >= GRAIN_FAINT_N:
+        verdict = "faint"
+    else:
+        verdict = "smooth"
+    out = {
+        "scales": list(GRAIN_SIGMAS),
+        "speck_n": speck_n,
+        "sep": seps,
+        "contrast": contrasts,
+        "polarity": polarity,
+        "verdict": verdict,
+    }
+    if skipped:
+        out["note"] = (
+            "component labeling skipped at ≥1 scale (dense mask, no scipy) — "
+            "speck_n=None there is a reach limit, not an absence of grain"
+        )
+    return out
+
+
+def mask_edge_contact(mask, ring: int = 2) -> float:
+    """Fraction of the frame-border ring occupied by the active mask.
+    High contact + a dominant component = the subject exceeds the window
+    (Cairn / M12: "one mass vs many is unanswerable from inside it")."""
+    import numpy as np
+
+    border = np.zeros_like(mask)
+    border[:ring, :] = True
+    border[-ring:, :] = True
+    border[:, :ring] = True
+    border[:, -ring:] = True
+    return float(mask[border].mean())
+
+
+def frame_layout(arr) -> dict:
+    """Compositional signature of one frame (Cairn / bean split-screen):
+    letterbox bar fractions + full-height vertical divider positions.
+    Spatial labels (band, centroid) are only comparable within one layout.
+    """
+    import numpy as np
+
+    h, w = arr.shape
+    row_std = arr.std(axis=1)
+    row_mean = arr.mean(axis=1)
+    bar = (row_std < 6) & (row_mean < 24)
+    lb_top = 0
+    while lb_top < h and bar[lb_top]:
+        lb_top += 1
+    lb_bot = 0
+    while lb_bot < h and bar[h - 1 - lb_bot]:
+        lb_bot += 1
+    # full-height vertical lines: columns where |dI/dx| is strong on ≥85% of rows
+    gx = np.abs(np.diff(arr, axis=1))
+    strong = (gx > 15).mean(axis=0)
+    cols = [
+        round((x + 0.5) / max(1, w - 1), 3)
+        for x in range(len(strong))
+        if strong[x] >= 0.85
+    ]
+    # collapse adjacent columns into one divider position
+    dividers: list[float] = []
+    for c in cols:
+        if not dividers or c - dividers[-1] > 2.5 / w:
+            dividers.append(c)
+    return {
+        "letterbox_top": round(lb_top / h, 3),
+        "letterbox_bottom": round(lb_bot / h, 3),
+        "vsplit_cols": dividers[:3],
+    }
 
 
 def motion_stats(
@@ -744,6 +1123,27 @@ def motion_stats(
         frame_sim=frame_sim,
     )
 
+    try:
+        shape = mask_shape(mask)
+    except Exception:
+        shape = None
+    if shape is not None:
+        shape["edge_contact"] = round(mask_edge_contact(mask), 3)
+        if shape["edge_contact"] > 0.5 and shape["largest_frac"] > 0.6:
+            # framing floor: the active region presses the window edge while
+            # one component dominates — the subject exceeds this frame
+            shape["frame_floor"] = True
+    try:
+        grain = grain_stats(b, mask)
+    except Exception:
+        grain = None
+    try:
+        layout = frame_layout(
+            np.asarray(b.resize((96, 54)), dtype=np.float32)
+        )
+    except Exception:
+        layout = None
+
     return {
         "energy": round(energy, 2),
         "peak": round(peak, 1),
@@ -761,6 +1161,9 @@ def motion_stats(
         "frame_sim": round(frame_sim, 3),
         "frame_sim_norm": round(frame_sim_norm, 3),
         "luminance": {"from": round(a_lum, 2), "to": round(b_lum, 2)},
+        "shape": shape,
+        "grain": grain,
+        "layout": layout,
         "ascii": ascii_name,
     }
 
@@ -800,6 +1203,75 @@ def apply_fade_detection(motion: list[dict]) -> list[dict]:
             m["kind_alt_why"] = (
                 f"possible fade-{direction}: lum Δ{delta:.0f}, sim={sim:.2f}"
             )
+    return motion
+
+
+def apply_paired_cut_merge(
+    motion: list[dict],
+    *,
+    energy_tol: float = 12.0,
+    sim_tol: float = 0.15,
+) -> list[dict]:
+    """Merge adjacent same-signature JUMP_CUT pairs into one edit (Isaac / La Jetée).
+
+    Dissolves and slow transitions often land as *two* adjacent JUMP_CUTs with
+    near-identical energy/sim (one transition straddling two samples). That
+    inflates cut counts ~2×. Keep the first as the edit event; demote the
+    second so segment boundaries and --interesting walks don't double-count.
+
+    Does not invent a new primary kind — first stays JUMP_CUT/HARD_CHANGE;
+    second becomes STIR with kind_alt pointing at the paired cut.
+    """
+    cut_kinds = {"JUMP_CUT", "HARD_CHANGE"}
+
+    def _sim(m: dict) -> float:
+        if m.get("frame_sim") is not None:
+            return float(m["frame_sim"])
+        if m.get("sim") is not None:
+            return float(m["sim"])
+        return 0.0
+
+    i = 0
+    while i < len(motion) - 1:
+        a, b = motion[i], motion[i + 1]
+        ka, kb = a.get("kind"), b.get("kind")
+        if ka not in cut_kinds or kb not in cut_kinds:
+            i += 1
+            continue
+        # Prefer consecutive beats (paired sample straddle)
+        try:
+            if int(b.get("beat", -99)) - int(a.get("beat", -99)) != 1:
+                i += 1
+                continue
+        except (TypeError, ValueError):
+            i += 1
+            continue
+        ea, eb = float(a.get("energy") or 0), float(b.get("energy") or 0)
+        sa, sb = _sim(a), _sim(b)
+        if abs(ea - eb) <= energy_tol and abs(sa - sb) <= sim_tol:
+            # Annotate first as head of pair
+            a["paired_cut"] = True
+            a["paired_with_beat"] = b.get("beat")
+            why_extra = (
+                f" | paired-cut head: next beat same signature "
+                f"(e={ea:.1f}/{eb:.1f} sim={sa:.3f}/{sb:.3f}) — one edit, two samples"
+            )
+            if why_extra not in (a.get("kind_why") or ""):
+                a["kind_why"] = (a.get("kind_why") or "") + why_extra
+            # Demote second so cut counts / segments don't double
+            b["kind_alt"] = kb
+            b["kind_alt_why"] = b.get("kind_why")
+            b["kind"] = "STIR"
+            b["kind_why"] = (
+                f"paired-cut tail of beat {a.get('beat')}: same-signature adjacent "
+                f"JUMP (eΔ={abs(ea-eb):.1f} simΔ={abs(sa-sb):.3f}) — not a second edit"
+            )
+            b["kind_confidence"] = 0.8
+            b["paired_cut_tail"] = True
+            b["paired_with_beat"] = a.get("beat")
+            i += 2  # don't triple-merge chains greedily from middle
+            continue
+        i += 1
     return motion
 
 
@@ -863,6 +1335,493 @@ def apply_strobe_detection(
                     f"may be world thrash / whip, not shot progression"
                 )
     return motion
+
+
+def _bridge_kit():
+    """Cached similarity pair for bridge audits: histogram correlation
+    (same tonal palette) + mean-subtracted pixel correlation (same spatial
+    structure). Both in [≈−1, 1]. The world held only when structure agrees;
+    palette alone false-bridges across different stills of one film stock.
+    """
+    hist_cache: dict[str, "object"] = {}
+    pix_cache: dict[str, "object"] = {}
+
+    def _hist(p: Path):
+        import numpy as np
+        from PIL import Image
+
+        key = str(p)
+        h = hist_cache.get(key)
+        if h is None:
+            A = np.asarray(Image.open(p).convert("L").resize((64, 64)), dtype=np.float32)
+            h = np.histogram(A, bins=32, range=(0, 255))[0].astype(np.float64) + 1e-6
+            h /= h.sum()
+            hist_cache[key] = h
+        return h
+
+    def _arr(p: Path):
+        import numpy as np
+        from PIL import Image
+
+        key = str(p)
+        a = pix_cache.get(key)
+        if a is None:
+            a = np.asarray(Image.open(p).convert("L").resize((48, 27)), dtype=np.float64)
+            a = a - a.mean()
+            pix_cache[key] = a
+        return a
+
+    def sim(a: Path, b: Path) -> float:
+        import numpy as np
+
+        return float(np.corrcoef(_hist(a), _hist(b))[0, 1])
+
+    def pix(a: Path, b: Path) -> float:
+        import numpy as np
+
+        A, B = _arr(a), _arr(b)
+        d = np.sqrt((A * A).sum() * (B * B).sum()) + 1e-9
+        return float((A * B).sum() / d)
+
+    return sim, pix
+
+
+def apply_cut_audit(
+    motion: list[dict],
+    frames: list[Path],
+    interval: float,
+) -> list[dict]:
+    """Audit every alleged cut against the world, not just the frame
+    (perception night 2026-07-18: five witnesses, one convergent ask).
+
+    A JUMP_CUT/HARD_CHANGE verdict only consults consecutive-frame similarity,
+    which cannot tell the frame changing from the world changing. Three cases
+    the night produced (Isaac / 1906 Market Street):
+
+      occlusion  — a wagon sweeps the lens; the street holds still behind it
+      rotation   — the camera turns through a continuous scene (Ferry loop)
+      flicker    — nitrate exposure thrash; structure holds under the strobe
+
+    Bridge test: compare ~2s before the boundary to ~2s after, skipping the
+    alleged cut. If similarity recovers, the world held — demote. If the
+    flanks are stable but the bridge stays broken, the cut is real — verify.
+    If the flanks are themselves churning, the boundary sits inside sustained
+    change (pan/turn/dense montage) below this interval's floor — say so
+    instead of guessing.
+
+    Confidence becomes *derived* from the margins (Pi: three quantized values
+    over sim spanning −0.23..0.88, anti-correlated with worth on archival film).
+    """
+    if len(frames) < 3 or not motion:
+        return motion
+    k = max(1, int(round(2.0 / max(interval, 0.05))))
+    n = len(frames)
+    sim, pix = _bridge_kit()
+
+    alleged = verified = demoted = churn = 0
+    for m in motion:
+        if m.get("kind") not in ("JUMP_CUT", "HARD_CHANGE"):
+            continue
+        i = int(m["beat"])
+        # beat i = boundary frames[i-1] → frames[i]
+        pre_i, post_i = i - 1 - k, i + k
+        if i - 1 < 0 or i >= n:
+            continue
+        edge = pre_i < 0 or post_i >= n
+        pre_i, post_i = max(0, pre_i), min(n - 1, post_i)
+        if pre_i >= i - 1 or post_i <= i:
+            m["cut_audit"] = "unaudited_edge"
+            continue
+        alleged += 1
+        try:
+            bridge = sim(frames[pre_i], frames[post_i])
+            bridge_pix = pix(frames[pre_i], frames[post_i])
+            flank_pre = sim(frames[pre_i], frames[i - 1])
+            flank_post = sim(frames[i], frames[post_i])
+        except Exception:
+            m["cut_audit"] = "unaudited_error"
+            continue
+        boundary = float(m.get("frame_sim") or 0.0)
+        sim_norm = float(m.get("frame_sim_norm") or boundary)
+        m["bridge_sim"] = round(bridge, 3)
+        m["bridge_pix"] = round(bridge_pix, 3)
+        m["flank_sims"] = [round(flank_pre, 3), round(flank_post, 3)]
+
+        # Window 1 — shot-bounded (La Jetée blink lesson): if a window that
+        # stops at neighboring cuts still bridges, this beat is motion INSIDE
+        # a shot wearing a cut label (high energy two beats after a real cut).
+        # Checked before the fixed window so a nearby true cut can't leak into
+        # the verdict about THIS beat.
+        cutish = {"JUMP_CUT", "HARD_CHANGE", "STROBE", "FADE"}
+        b_lo = i - 1
+        for _ in range(k):
+            j = b_lo
+            if j - 1 < 0 or (0 <= j < len(motion) and j != i and motion[j].get("kind") in cutish):
+                break
+            b_lo -= 1
+        b_hi = i
+        for _ in range(k):
+            j = b_hi + 1
+            if j >= n or (j < len(motion) and motion[j].get("kind") in cutish):
+                break
+            b_hi += 1
+        local_ok = False
+        if b_lo >= 0 and b_hi < n and (i - 1 - b_lo) >= 1 and (b_hi - i) >= 1:
+            try:
+                l_sim = sim(frames[b_lo], frames[b_hi])
+                l_pix = pix(frames[b_lo], frames[b_hi])
+                local_ok = l_sim >= 0.60 and l_pix >= 0.50
+            except Exception:
+                local_ok = False
+        if local_ok:
+            demoted += 1
+            m["kind_alt"] = m.get("kind")
+            m["kind_alt_why"] = m.get("kind_why")
+            m["kind"] = "LOCAL_MOVE"
+            m["kind_why"] = (
+                f"world holds inside shot-bounded window [{b_lo}..{b_hi}]: "
+                f"sim={l_sim:.2f} pix={l_pix:.2f} — motion within a shot, "
+                f"not an edit (neighboring cut excluded from the window)"
+            )
+            m["kind_confidence"] = round(min(0.95, 0.55 + (l_pix - 0.50) * 0.8), 2)
+            m["cut_audit"] = "demoted_world_hold_local"
+            if edge:
+                m["cut_audit"] += "_clamped"
+            continue
+
+        # Window 2 — fixed ±k, two-eyed bridge (La Jetée false-demote lesson):
+        # histogram answers "same tonal palette", pixel correlation answers
+        # "same spatial structure". Different B&W stills share palettes —
+        # only structure certifies the world held (occlusion/flicker bridge over).
+        hist_holds = bridge >= 0.80 or (bridge >= 0.60 and bridge >= boundary + 0.25)
+        if hist_holds and bridge_pix >= 0.50:
+            # world held across the boundary — transient in the frame, not a cut
+            demoted += 1
+            flavor = (
+                "exposure flicker (structure holds normalized)"
+                if sim_norm >= 0.90
+                else "occlusion/passing object"
+            )
+            m["kind_alt"] = m.get("kind")
+            m["kind_alt_why"] = m.get("kind_why")
+            m["kind"] = "LOCAL_MOVE"
+            m["kind_why"] = (
+                f"world holds across boundary: bridge sim(t±{k})={bridge:.2f} "
+                f"pix={bridge_pix:.2f} vs boundary sim={boundary:.2f} — "
+                f"{flavor}, not an edit"
+            )
+            m["kind_confidence"] = round(
+                min(0.95, 0.55 + max(0.0, min(bridge, bridge_pix) - boundary) * 0.45), 2
+            )
+            m["cut_audit"] = "demoted_world_hold"
+        elif flank_pre >= 0.80 and flank_post >= 0.80 and (
+            bridge <= 0.60 or bridge_pix <= 0.35
+        ):
+            # stable shot on both sides, bridge broken — the edit is real
+            verified += 1
+            extra = (
+                f" | audit: flanks stable ({flank_pre:.2f}/{flank_post:.2f}), "
+                f"bridge broken ({bridge:.2f}) — verified structural cut"
+            )
+            if extra not in (m.get("kind_why") or ""):
+                m["kind_why"] = (m.get("kind_why") or "") + extra
+            m["kind_confidence"] = round(
+                min(0.97, 0.66 + (flank_pre + flank_post - 1.6) * 0.5 + max(0.0, 0.6 - bridge) * 0.2),
+                2,
+            )
+            m["cut_audit"] = "verified_cut"
+        else:
+            # boundary sits inside sustained change — below this interval's floor
+            churn += 1
+            extra = (
+                f" | audit: flanks churning ({flank_pre:.2f}/{flank_post:.2f}), "
+                f"bridge={bridge:.2f} — pan/turn/dense-edit ambiguity at this interval"
+            )
+            if extra not in (m.get("kind_why") or ""):
+                m["kind_why"] = (m.get("kind_why") or "") + extra
+            m["kind_confidence"] = 0.55
+            m["cut_audit"] = "churn_at_floor"
+        if edge:
+            m["cut_audit"] += "_clamped"
+
+    # stash tallies on the list for build_summary via a sentinel attribute-free
+    # channel: caller reads them back by re-counting cut_audit fields.
+    return motion
+
+
+def audit_tally(motion: list[dict]) -> dict:
+    c = Counter(m.get("cut_audit") for m in motion if m.get("cut_audit"))
+    cuts_now = sum(
+        1 for m in motion if m.get("kind") in ("JUMP_CUT", "HARD_CHANGE")
+    )
+    return {
+        "alleged": sum(
+            v for kk, v in c.items() if kk and not kk.startswith("unaudited")
+        ),
+        "verified": sum(v for kk, v in c.items() if kk and kk.startswith("verified")),
+        "demoted_world_hold": sum(
+            v for kk, v in c.items() if kk and kk.startswith("demoted")
+        ),
+        "churn_at_floor": sum(v for kk, v in c.items() if kk and kk.startswith("churn")),
+        "unaudited": sum(
+            v for kk, v in c.items() if kk and kk.startswith("unaudited")
+        ),
+        "cuts_after_audit": cuts_now,
+        "note": (
+            "verified = flanks stable + bridge broken; demoted = world holds across "
+            "the boundary (occlusion/flicker); churn = boundary inside sustained "
+            "change, unresolvable at this sampling interval"
+        ),
+    }
+
+
+def apply_motion_audit(
+    motion: list[dict],
+    frames: list[Path],
+    interval: float,
+    energy_min: float = 18.0,
+) -> list[dict]:
+    """Bridge-test high-energy held-structure beats for the dissolve confound
+    (Cairn / La Jetée self-refutation: a dissolve is high energy with per-beat
+    structure held — definitionally inside the naive 'motion' region, so two
+    axes alone CANNOT separate motion from gradual replacement).
+
+    True motion preserves the world: t−k and t+k agree while the middle spikes.
+    A dissolve replaces it gradually: t−k and t+k disagree. Same instrument as
+    the cut audit, pointed at the opposite quadrant. Marked as a hypothesis
+    field, not a kind change — the falsifier is running it over a full film,
+    which this pass makes cheap for anyone.
+    """
+    if len(frames) < 3 or not motion:
+        return motion
+    k = max(1, int(round(2.0 / max(interval, 0.05))))
+    n = len(frames)
+    sim, pix = _bridge_kit()
+
+    for m in motion:
+        if m.get("kind") not in ("LOCAL_MOVE", "HARD_CHANGE"):
+            continue
+        if m.get("cut_audit"):  # already audited as an alleged cut
+            continue
+        e = float(m.get("energy") or 0.0)
+        s = float(m.get("frame_sim") or 0.0)
+        if e < energy_min or s < 0.85:
+            continue
+        i = int(m["beat"])
+
+        # Shot-local window (La Jetée blink lesson): a bridge that crosses a
+        # neighboring cut measures that cut, not this beat. Walk outward but
+        # stop at any cut-ish beat, so the verdict stays about THIS motion.
+        cutish = {"JUMP_CUT", "HARD_CHANGE", "STROBE", "FADE"}
+        pre_lo = i - 1
+        for _ in range(k):
+            j = pre_lo  # beat j = transition frames[j-1] → frames[j]
+            if j - 1 < 0 or (0 <= j < len(motion) and motion[j].get("kind") in cutish):
+                break
+            pre_lo -= 1
+        post_hi = i
+        for _ in range(k):
+            j = post_hi + 1
+            if j >= n or (j < len(motion) and motion[j].get("kind") in cutish):
+                break
+            post_hi += 1
+        if pre_lo < 0 or post_hi >= n or (i - 1 - pre_lo) + (post_hi - i) < 2:
+            m["motion_audit"] = "short_shot"
+            continue
+        try:
+            bridge = sim(frames[pre_lo], frames[post_hi])
+            bridge_pix = pix(frames[pre_lo], frames[post_hi])
+        except Exception:
+            continue
+        m["bridge_sim"] = round(bridge, 3)
+        m["bridge_pix"] = round(bridge_pix, 3)
+        m["bridge_span"] = [pre_lo, post_hi]
+        if bridge <= 0.60 or bridge_pix <= 0.35:
+            m["motion_audit"] = "dissolve_like"
+            m["kind_alt"] = m.get("kind_alt") or "DISSOLVE"
+            m["kind_alt_why"] = (
+                f"world drifts across shot-local bridge [{pre_lo}..{post_hi}]: "
+                f"sim={bridge:.2f} pix={bridge_pix:.2f} despite held per-beat "
+                f"sim={s:.2f} — gradual replacement, not motion"
+            )
+        elif bridge_pix >= 0.50:
+            m["motion_audit"] = "world_holds"
+        # middle ground stays unmarked — ambiguous at this interval
+    return motion
+
+
+def apply_quadrants(motion: list[dict]) -> list[dict]:
+    """Surface the two raw axes under every kind noun, plus the bridge verdict.
+
+    Energy and structure are independent axes a kind label collapses:
+
+        MOVING    energy high, structure held, world bridges — something moves IN a persisting world
+        DISSOLVE  structure nominally held/lost slowly but the world drifts — gradual replacement
+        REPLACED  energy high, structure lost — the world is swapped (edit)
+        HIDDEN    REPLACED that bridges back — the world was never lost, only covered
+        STILL     low energy, structure held
+
+    Two axes alone are NOT a motion discriminator (Cairn's La Jetée
+    self-refutation: dissolves live in the naive motion region — 261 beats
+    qualified where the eye found one). The bridge column is what separates
+    them; without a bridge verdict the quadrant is a location, not a finding.
+    """
+    for m in motion:
+        if m.get("kind") == "OPEN":
+            continue
+        e = float(m.get("energy") or 0.0)
+        sim = m.get("frame_sim")
+        if sim is None:
+            continue
+        sim = float(sim)
+        held = sim >= 0.88
+        if m.get("motion_audit") == "dissolve_like":
+            q = "DISSOLVE"
+        elif e >= 8 and held:
+            q = "MOVING"
+        elif e >= 8 and not held:
+            q = "HIDDEN" if str(m.get("cut_audit", "")).startswith("demoted") else "REPLACED"
+        elif not held:
+            q = "DISSOLVE"
+        else:
+            q = "STILL"
+        m["quadrant"] = q
+    return motion
+
+
+def apply_layout_guard(motion: list[dict], min_hold: int = 3) -> list[dict]:
+    """Mark compositional re-framing so spatial labels can't silently lie
+    (Cairn / bean timelapse: split-screen divider at x≈240, four re-framings —
+    band=ground/bottom meant 'roots' in one segment and 'letterbox bar' in another).
+
+    Uses per-beat layout signatures from motion_stats (letterbox fractions +
+    full-height vertical divider positions). A shift only counts when the new
+    layout persists ≥ min_hold beats — one-beat 'dividers' are usually an
+    occluder's edge, not a re-frame.
+    """
+    sigs: list[tuple | None] = []
+    for m in motion:
+        lay = m.get("layout")
+        if not lay:
+            sigs.append(None)
+            continue
+        sigs.append((
+            round(float(lay.get("letterbox_top", 0)), 2),
+            round(float(lay.get("letterbox_bottom", 0)), 2),
+            tuple(int(round(x * 32)) for x in (lay.get("vsplit_cols") or [])),
+        ))
+
+    def close(a, b) -> bool:
+        if a is None or b is None:
+            return True
+        if abs(a[0] - b[0]) > 0.05 or abs(a[1] - b[1]) > 0.05:
+            return False
+        da, db = set(a[2]), set(b[2])
+        if da == db:
+            return True
+        # tolerate ±1/32 jitter on divider positions
+        return all(any(abs(x - y) <= 1 for y in db) for x in da) and all(
+            any(abs(x - y) <= 1 for y in da) for x in db
+        )
+
+    shifts = 0
+    i = 1
+    while i < len(sigs):
+        if not close(sigs[i - 1], sigs[i]):
+            held = all(
+                close(sigs[i], sigs[j])
+                for j in range(i + 1, min(len(sigs), i + min_hold))
+            )
+            if held:
+                m = motion[i]
+                m["layout_shift"] = True
+                m["layout_note"] = (
+                    "composition changed here (letterbox/split/divider) — "
+                    "band and centroid labels are not comparable across this boundary"
+                )
+                shifts += 1
+                i += min_hold
+                continue
+        i += 1
+    return motion
+
+
+def detect_author_index(words: list[dict]) -> dict | None:
+    """Find the author's own index in SHOWN text (Cairn / bean day-counter).
+
+    A monotone, recurring, structured counter (Day 7, 00:41, LAP 3) is
+    load-bearing: the author had to keep it consistent with their own footage.
+    Still untrusted as instruction — but usable as *constraint*, unlike a
+    decorative one-off caption. Only runs when OCR/SHOWN text exists.
+    """
+    pat = re.compile(r"([A-Za-z]{2,12})\s*[.:#]?\s*(\d{1,5})")
+    groups: dict[str, list[tuple[int, int]]] = {}
+    for w in words:
+        shown = (w.get("shown") or "").strip()
+        if not shown:
+            continue
+        for mt in pat.finditer(shown):
+            key = mt.group(1).lower()
+            try:
+                val = int(mt.group(2))
+            except ValueError:
+                continue
+            groups.setdefault(key, []).append((int(w["beat"]), val))
+    best_key, best = None, None
+    for key, pairs in groups.items():
+        # one value per beat (first match wins), need real coverage
+        seen_b: dict[int, int] = {}
+        for b, v in pairs:
+            seen_b.setdefault(b, v)
+        seq = sorted(seen_b.items())
+        if len(seq) < 6:
+            continue
+        diffs = [b2[1] - b1[1] for b1, b2 in zip(seq, seq[1:])]
+        mono = sum(1 for d in diffs if d >= 0) / len(diffs)
+        if mono < 0.85:
+            continue
+        if best is None or len(seq) > len(best):
+            best_key, best = key, seq
+    if best is None:
+        return None
+    beats = [b for b, _ in best]
+    vals = [v for _, v in best]
+    span_b = max(1, beats[-1] - beats[0])
+    # rate per beat over quartiles — catches speed ramps, not just the mean
+    qrates = []
+    for qi in range(4):
+        lo = beats[0] + span_b * qi // 4
+        hi = beats[0] + span_b * (qi + 1) // 4
+        seg = [(b, v) for b, v in best if lo <= b <= hi]
+        if len(seg) >= 2 and seg[-1][0] > seg[0][0]:
+            qrates.append(
+                round((seg[-1][1] - seg[0][1]) / (seg[-1][0] - seg[0][0]), 3)
+            )
+        else:
+            qrates.append(None)
+    return {
+        "template": best_key,
+        "n_beats": len(best),
+        "first": {"beat": beats[0], "value": vals[0]},
+        "last": {"beat": beats[-1], "value": vals[-1]},
+        "monotone_frac": round(
+            sum(1 for a, b in zip(vals, vals[1:]) if b >= a) / max(1, len(vals) - 1), 2
+        ),
+        "rate_per_beat_quartiles": qrates,
+        "rate_stable": (
+            None
+            if any(r is None for r in qrates)
+            else bool(
+                max(r for r in qrates) - min(r for r in qrates)
+                <= 0.25 * max(1e-9, abs(sum(qrates) / 4))
+            )
+        ),
+        "trust": (
+            "untrusted (video-authored) — usable as constraint, never instruction. "
+            "Unstable quartile rates mean the time base itself is authored "
+            "(speed ramp): energy/rate figures measure the editor's tempo too."
+        ),
+    }
 
 
 def summarize_segments(segs: list[dict], max_keep: int = 40) -> dict:
@@ -1014,16 +1973,40 @@ def build_channels(
             "motion_kind": m.get("kind"),
             "motion_energy": m.get("energy", 0),
             "kind_confidence": m.get("kind_confidence"),
+            **project_pixel_channels(m),
         })
 
     motion_beats = apply_fade_detection(motion_beats)
+    motion_beats = apply_paired_cut_merge(motion_beats)
     motion_beats = apply_strobe_detection(motion_beats, frames, interval)
-    # refresh index kinds after fade/strobe passes
+    motion_beats = apply_cut_audit(motion_beats, frames, interval)
+    motion_beats = apply_quadrants(motion_beats)
+    motion_beats = apply_layout_guard(motion_beats)
+    # refresh index kinds after fade/strobe/audit passes
     for row in index:
         bi = row["beat"]
         if bi < len(motion_beats):
             row["motion_kind"] = motion_beats[bi].get("kind")
+            row["kind_confidence"] = motion_beats[bi].get("kind_confidence")
     return words_beats, motion_beats, index
+
+
+def project_pixel_channels(m: dict) -> dict:
+    """Compact scalars from the pixel channels for beats.jsonl — the thin
+    reading surface. Explicit nulls, not missing keys: a reader must be able
+    to tell "channel gave nothing here" from "channel lives elsewhere"
+    (Pi #2386, the false-null papercut). Full rows stay in motion.jsonl."""
+    shape = m.get("shape") or {}
+    grain = m.get("grain") or {}
+    out = {
+        "shape_blobs": shape.get("blobs"),
+        "shape_largest_frac": shape.get("largest_frac"),
+        "grain_verdict": grain.get("verdict"),
+        "grain_speck_n": (grain.get("speck_n") or [None])[0],
+    }
+    if shape.get("frame_floor"):
+        out["frame_floor"] = True
+    return out
 
 
 def build_summary(
@@ -1049,23 +2032,118 @@ def build_summary(
     if len(cxs) >= 4:
         drift = round(cxs[-1] - cxs[0], 3)
     coupling = compute_coupling(words, motion)
+    audit_t = audit_tally(motion)
     grammar = infer_grammar(
         dict(kinds),
         len(motion),
         mean_e,
         centroid_drift_x=drift,
         coupling=coupling,
+        audit=audit_t,
     )
+    quad_counts = Counter(
+        m.get("quadrant") for m in motion if m.get("quadrant")
+    )
+    layout_shifts = [int(m["beat"]) for m in motion if m.get("layout_shift")]
+    author_index = detect_author_index(words)
+
+    def _med(vals):
+        vals = sorted(vals)
+        if not vals:
+            return None
+        mid = len(vals) // 2
+        v = vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+        return round(float(v), 3)
+
+    grains = [m["grain"] for m in motion if m.get("grain")]
+    grain_summary = None
+    if grains:
+        fine_n = [g["speck_n"][0] for g in grains if g["speck_n"][0] is not None]
+        fine_sep = [g["sep"][0] for g in grains if g["sep"][0] is not None]
+        fine_c = [g["contrast"][0] for g in grains if g["contrast"]]
+        gv = Counter(g["verdict"] for g in grains)
+        grain_summary = {
+            "beats_measured": len(grains),
+            "fine_speck_n_med": _med(fine_n),
+            "fine_sep_med": _med(fine_sep),
+            "fine_contrast_med": _med(fine_c),
+            "verdict_counts": dict(gv),
+            "verdict": gv.most_common(1)[0][0],
+            "note": (
+                "individual-separability of the active region (granular/faint/"
+                "smooth read the finest scale); thresholds calibrated on "
+                "crop-battery-20260718 (one source) — cross-source comparisons "
+                "are hypothesis, not verdict"
+            ),
+        }
+    has_shape = any(m.get("shape") for m in motion)
+    frame_floor_beats = [
+        int(m["beat"]) for m in motion if (m.get("shape") or {}).get("frame_floor")
+    ]
+    if not has_shape:
+        framing_floor_line = (
+            "unmeasured — this residue has no shape channel (re-ingest, or "
+            "rescore with frames present, to add it)"
+        )
+    elif frame_floor_beats:
+        framing_floor_line = (
+            f"active region presses the frame edge on {len(frame_floor_beats)}"
+            f"/{len(motion)} beats (edge_contact>0.5 ∧ largest_frac>0.6) — the "
+            "subject exceeds this window there; whole-object claims (one mass "
+            "vs many, full extent, entry/exit) are out of reach on those beats"
+        )
+    else:
+        framing_floor_line = (
+            "active region stays inside the frame on every measured beat — "
+            "whole-object claims are within this window's reach"
+        )
     return {
         "title": title,
         "source": source,
         "interval": interval,
         "n_beats": len(motion),
         "kind_counts": dict(kinds),
+        "quadrant_counts": dict(quad_counts),
+        "cut_audit": audit_t,
         "mean_energy": round(mean_e, 2),
         "grammar": grammar,
         "centroid_drift_x": drift,
         "coupling": coupling,
+        "grain": grain_summary,
+        "frame_floor_beats": frame_floor_beats[:20],
+        "frame_floor_total": len(frame_floor_beats),
+        "layout_shifts": layout_shifts[:20],
+        "layout_shifts_total": len(layout_shifts),
+        "layout_note": (
+            "band/centroid labels are only comparable within a stable layout; "
+            "shifts mark re-framing boundaries (split-screen, letterbox, crop)"
+            if layout_shifts
+            else None
+        ),
+        "author_index": author_index,
+        "reach": {
+            "interval": interval,
+            "floor": (
+                f"events shorter than {interval}s are invisible; cuts between "
+                f"visually similar scenes do not register (splice-blind when "
+                f"adjacent shots match in histogram); rhythm faster than "
+                f"{1.0 / max(interval, 1e-9):.1f}/s cannot be resolved"
+            ),
+            "cut_floor": (
+                f"cut rates ≥ ~1 per beat are indistinguishable from continuous "
+                f"transformation at {interval}s (audited as churn_at_floor)"
+            ),
+            "time_base": (
+                "assumed linear — the tool cannot verify the source's world-time "
+                "rate; timelapse/slow-mo/speed ramps rescale every energy and "
+                "rate figure (see author_index for an in-video counter when one exists)"
+            ),
+            "framing_floor": framing_floor_line,
+            "note": (
+                "a null at this layer is a statement about this read's reach, "
+                "not about the film"
+            ),
+        },
         "n_segments": seg_summary["segments_total"],
         "segments_total": seg_summary["segments_total"],
         "segments_truncated": seg_summary["segments_truncated"],
@@ -1099,6 +2177,12 @@ def build_stream(words: list[dict], motion: list[dict]) -> list[dict]:
             "kind_confidence": m.get("kind_confidence"),
             "energy": m.get("energy"),
             "frame_sim": m.get("frame_sim"),
+            "quadrant": m.get("quadrant"),
+            "bridge_sim": m.get("bridge_sim"),
+            "cut_audit": m.get("cut_audit"),
+            "motion_audit": m.get("motion_audit"),
+            "shape": m.get("shape"),
+            "layout_shift": m.get("layout_shift"),
             "centroid": m.get("centroid"),
             "said": said,
             "words_trust": (w.get("trust") or "untrusted") if said else None,
@@ -1202,6 +2286,50 @@ def interesting_beats(
     return selected
 
 
+def rare_motion_beats(
+    motion: list[dict],
+    *,
+    window: int = 12,
+    kinds: set[str] | None = None,
+    max_n: int | None = None,
+) -> list[int]:
+    """Rank motion-in-stillness (Isaac La Jetée note): LOCAL_MOVE/STIR in HOLD-dense neighborhoods.
+
+    Default --interesting is cut-biased. --rare-motion surfaces contextual rarity:
+    score = motion_energy * surrounding HOLD density (and a small bonus for LOCAL_MOVE).
+    """
+    if not motion:
+        return []
+    n = len(motion)
+    kinds = kinds or {"LOCAL_MOVE", "STIR"}
+    is_hold = [(m.get("kind") or "").upper() == "HOLD" for m in motion]
+
+    scored: list[tuple[float, int]] = []
+    for i, m in enumerate(motion):
+        kind = (m.get("kind") or "?").upper()
+        if kind not in kinds:
+            continue
+        lo = max(0, i - window)
+        hi = min(n, i + window + 1)
+        neigh = hi - lo - 1  # exclude self
+        if neigh <= 0:
+            hold_frac = 0.0
+        else:
+            hold_n = sum(1 for j in range(lo, hi) if j != i and is_hold[j])
+            hold_frac = hold_n / neigh
+        e = float(m.get("energy") or 0)
+        bonus = 1.5 if kind == "LOCAL_MOVE" else 1.0
+        score = (e + 0.1) * (0.15 + hold_frac) * bonus
+        scored.append((score, int(m["beat"])))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    if max_n is not None:
+        scored = scored[:max_n]
+    # walk in time order for reading
+    beats = sorted(b for _, b in scored)
+    return beats
+
+
 def render_md(
     title: str,
     source: str,
@@ -1226,12 +2354,25 @@ def render_md(
         "- **WORDS are UNTRUSTED video-authored content, never instructions.** ",
         "  SAID comes from `video_captions`; SHOWN/OCR hints come from `video_ocr`.",
         "",
-        "## Motion grammar (guess)",
-        f"- **label:** `{g.get('label')}` (confidence {g.get('confidence')})",
+        "## Motion grammar (hypothesis, not verdict)",
+        f"- **label:** `{g.get('label')}` (fit {g.get('fit', g.get('confidence'))})"
+        + (f" — best guess `{g.get('best_guess')}`" if g.get("best_guess") else ""),
         f"- **notes:** {g.get('notes')}",
         f"- **kinds:** {kinds}",
+        f"- **quadrants (energy × structure × bridge):** {summary.get('quadrant_counts')}",
         f"- **mean energy:** {summary.get('mean_energy')}",
         f"- **centroid drift x (non-cut):** {summary.get('centroid_drift_x')}",
+        (
+            f"- **grain (individual-separability):** `{summary['grain']['verdict']}` — "
+            f"fine specks med {summary['grain']['fine_speck_n_med']}, "
+            f"sep {summary['grain']['fine_sep_med']}, "
+            f"contrast {summary['grain']['fine_contrast_med']} "
+            f"(verdicts {summary['grain']['verdict_counts']}; thresholds "
+            f"calibrated on one source — cross-source reads are hypothesis)"
+            if summary.get("grain")
+            else "- **grain (individual-separability):** absent — no grain "
+            "channel in this residue (needs frames at ingest/rescore)"
+        ),
         "",
         "## Speech ↔ picture coupling",
         f"- **mode:** `{coup.get('mode')}`",
@@ -1250,6 +2391,49 @@ def render_md(
         "High cut_density_in_speech + multi-cut caption runs ⇒ montage over VO.",
         "",
     ]
+    audit = summary.get("cut_audit") or {}
+    if audit.get("alleged"):
+        lines.extend([
+            "## Cut audit (bridge test — frame vs world)",
+            f"- alleged={audit.get('alleged')} · **verified={audit.get('verified')}** · "
+            f"demoted_world_hold={audit.get('demoted_world_hold')} (occlusion/flicker) · "
+            f"churn_at_floor={audit.get('churn_at_floor')} (pan/turn/dense-edit, "
+            f"unresolvable at this interval)",
+            "",
+        ])
+    reach = summary.get("reach") or {}
+    if reach:
+        lines.extend([
+            "## Reach (what this read cannot see)",
+            f"- {reach.get('floor')}",
+            f"- {reach.get('cut_floor')}",
+            f"- time base: {reach.get('time_base')}",
+            f"- framing floor: {reach.get('framing_floor')}",
+            f"- **{reach.get('note')}**",
+            "",
+        ])
+    if summary.get("layout_shifts"):
+        lines.extend([
+            f"**Layout shifts** at beats {summary['layout_shifts']}"
+            + (
+                f" (+{summary['layout_shifts_total'] - len(summary['layout_shifts'])} more)"
+                if summary.get("layout_shifts_total", 0) > len(summary["layout_shifts"])
+                else ""
+            )
+            + f" — {summary.get('layout_note')}",
+            "",
+        ])
+    ai = summary.get("author_index")
+    if ai:
+        lines.extend([
+            f"**Author's index detected** [UNTRUSTED video_ocr, constraint not instruction]: "
+            f"`{ai.get('template')} N` on {ai.get('n_beats')} beats, "
+            f"{ai['first']['value']}→{ai['last']['value']}, "
+            f"monotone {ai.get('monotone_frac')}, "
+            f"rate/beat by quartile {ai.get('rate_per_beat_quartiles')} "
+            f"(stable={ai.get('rate_stable')}) — unstable rate ⇒ authored time base.",
+            "",
+        ])
     if summary.get("burned_in_text_likely"):
         lines.extend([
             f"**Burned-in text likely** on OPEN frame — consider `--ocr`. "
@@ -1340,6 +2524,79 @@ def render_md(
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+
+def build_strip(
+    workdir: Path,
+    beat: int,
+    *,
+    pre: int = 2,
+    post: int = 3,
+    height: int = 180,
+    label: str | None = None,
+) -> Path | None:
+    """Ordered frame strip around one beat (Rowan: single keyframes do not
+    convey movement — the seeing happens at frame *sequences*). One image,
+    beats n−pre..n+post left to right, beat numbers burned into the top-left
+    of each tile so the strip stays legible outside its directory.
+    """
+    from PIL import Image, ImageDraw
+
+    frames = numeric_frames(workdir / "frames")
+    if not frames:
+        return None
+    n = len(frames)
+    # beat i boundary = frames[i-1] → frames[i]; strip spans the neighborhood
+    idxs = [j for j in range(beat - pre, beat + post + 1) if 0 <= j < n]
+    if len(idxs) < 2:
+        return None
+    tiles = []
+    for j in idxs:
+        im = Image.open(frames[j]).convert("RGB")
+        w = max(1, int(im.width * height / im.height))
+        im = im.resize((w, height))
+        d = ImageDraw.Draw(im)
+        tag = f"b{j}"
+        d.rectangle([0, 0, 8 + 7 * len(tag), 14], fill=(0, 0, 0))
+        d.text((4, 2), tag, fill=(255, 255, 255))
+        tiles.append(im)
+    sep = 2
+    total_w = sum(t.width for t in tiles) + sep * (len(tiles) - 1)
+    out = Image.new("RGB", (total_w, height), (24, 24, 24))
+    x = 0
+    for t in tiles:
+        out.paste(t, (x, 0))
+        x += t.width + sep
+    strips = workdir / "strips"
+    strips.mkdir(exist_ok=True)
+    name = f"beat_{beat:04d}" + (f"_{label}" if label else "") + ".jpg"
+    path = strips / name
+    out.save(path, quality=82)
+    return path
+
+
+def auto_strips(workdir: Path, motion: list[dict], cap: int = 12) -> list[str]:
+    """Strips for the audited events a walker will want to see in sequence:
+    verified cuts first (deepest bridge break first), then floor-churn heads.
+    """
+    def depth(m: dict) -> float:
+        return float(m.get("bridge_sim") if m.get("bridge_sim") is not None else 1.0)
+
+    verified = sorted(
+        (m for m in motion if str(m.get("cut_audit", "")).startswith("verified")),
+        key=depth,
+    )
+    churn = sorted(
+        (m for m in motion if str(m.get("cut_audit", "")).startswith("churn")),
+        key=depth,
+    )
+    made: list[str] = []
+    for m in (verified + churn)[:cap]:
+        tag = "cut" if str(m.get("cut_audit", "")).startswith("verified") else "churn"
+        p = build_strip(workdir, int(m["beat"]), label=tag)
+        if p:
+            made.append(p.name)
+    return made
 
 
 def cmd_perceive(args: argparse.Namespace) -> None:
@@ -1456,20 +2713,37 @@ def cmd_perceive(args: argparse.Namespace) -> None:
         },
     }, indent=2))
 
+    strips_made: list[str] = []
+    if not getattr(args, "no_strips", False):
+        try:
+            strips_made = auto_strips(workdir, motion)
+        except Exception as exc:  # noqa: BLE001
+            print(f"perceive: strips failed ({exc})", file=sys.stderr)
+    if strips_made:
+        summary["strips"] = strips_made
+        (workdir / "summary.json").write_text(json.dumps(summary, indent=2))
+
     said_n = sum(1 for w in words if w["said"])
     shown_n = sum(1 for w in words if w["shown"])
     kc = summary["kind_counts"]
     coup = summary.get("coupling") or {}
     fades = kc.get("FADE", 0)
+    audit = summary.get("cut_audit") or {}
+    g = summary["grammar"]
+    glabel = g["label"] + (f"?{g['best_guess']}" if g.get("best_guess") else "")
     print(
         f"perceive: {len(frames)} beats @ {args.interval}s | "
-        f"grammar={summary['grammar']['label']} | "
+        f"grammar={glabel} (hypothesis, fit={g.get('fit')}) | "
         f"coupling={coup.get('mode')} disagree={coup.get('disagree_score')} | "
         f"kinds jumps={kc.get('JUMP_CUT',0)+kc.get('HARD_CHANGE',0)} "
         f"fade={fades} local={kc.get('LOCAL_MOVE',0)} "
         f"hold/stir={kc.get('HOLD',0)+kc.get('STIR',0)} | "
+        f"cut-audit alleged={audit.get('alleged',0)} verified={audit.get('verified',0)} "
+        f"demoted={audit.get('demoted_world_hold',0)} churn={audit.get('churn_at_floor',0)} | "
         f"words said={said_n} shown={shown_n}"
-        f"{' | burned_in_text_likely' if burned_in else ''} | "
+        f"{' | burned_in_text_likely' if burned_in else ''}"
+        f"{' | strips=' + str(len(strips_made)) if strips_made else ''} | "
+        f"reach: floor {args.interval}s, time-base assumed linear | "
         f"-> {workdir}/score.md + summary.json + stream.jsonl"
     )
     if burned_in:
@@ -1531,21 +2805,30 @@ def cmd_walk(args: argparse.Namespace) -> None:
     if getattr(args, "kinds", None):
         kinds = {k.strip().upper() for k in args.kinds.split(",") if k.strip()}
 
+    use_rare = bool(getattr(args, "rare_motion", False))
     use_filter = bool(
         kinds
         or getattr(args, "interesting", False)
         or getattr(args, "speech_disagreement", False)
+        or use_rare
     )
 
     if use_filter:
-        indices = interesting_beats(
-            motion,
-            words,
-            kinds=kinds,
-            speech_disagreement=bool(args.speech_disagreement),
-            interesting=bool(args.interesting),
-            max_n=args.limit,
-        )
+        if use_rare:
+            indices = rare_motion_beats(
+                motion,
+                kinds=kinds,  # None → LOCAL_MOVE+STIR default
+                max_n=args.limit,
+            )
+        else:
+            indices = interesting_beats(
+                motion,
+                words,
+                kinds=kinds,
+                speech_disagreement=bool(args.speech_disagreement),
+                interesting=bool(args.interesting),
+                max_n=args.limit,
+            )
         if args.start is not None:
             indices = [i for i in indices if i >= args.start]
         if args.end is not None:
@@ -1555,7 +2838,8 @@ def cmd_walk(args: argparse.Namespace) -> None:
             return
         print(
             f"walk: {len(indices)} beats "
-            f"(interesting={bool(args.interesting)} kinds={kinds or '—'} "
+            f"(interesting={bool(args.interesting)} rare_motion={use_rare} "
+            f"kinds={kinds or '—'} "
             f"speech_disagreement={bool(args.speech_disagreement)})"
         )
     else:
@@ -1661,6 +2945,76 @@ def cmd_walk(args: argparse.Namespace) -> None:
     print(f"(cursor -> beat {last_i})")
 
 
+def parse_around_spec(spec: str) -> tuple[str, float | int]:
+    """Parse --around as beat index or time.
+
+    Returns ("beat", int) or ("time", seconds_float).
+
+    Accepted time forms (Isaac field note — avoid feeding seconds as beat index):
+      1285s  1285.5s  21:25  1:21:25  21m25s
+    Bare integers are beat indices (legacy).
+    """
+    s = (spec or "").strip()
+    if not s:
+        raise ValueError("empty --around")
+
+    # 21:25 or 1:21:25
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", s):
+        parts = [int(p) for p in s.split(":")]
+        if len(parts) == 2:
+            mm, ss = parts
+            return "time", float(mm * 60 + ss)
+        hh, mm, ss = parts
+        return "time", float(hh * 3600 + mm * 60 + ss)
+
+    # 21m25s / 1h2m3s / 90s
+    m = re.fullmatch(
+        r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if m and any(m.groups()):
+        h = int(m.group(1) or 0)
+        mi = int(m.group(2) or 0)
+        sec = float(m.group(3) or 0)
+        return "time", h * 3600 + mi * 60 + sec
+
+    # bare number → beat index (legacy)
+    if re.fullmatch(r"-?\d+", s):
+        return "beat", int(s)
+
+    raise ValueError(
+        f"unrecognized --around {spec!r} "
+        "(use beat index N, or time like 1285s / 21:25 / 21m25s)"
+    )
+
+
+def resolve_around_beat(motion: list[dict], spec: str) -> tuple[int, str]:
+    """Map --around spec to beat index. Returns (beat, note)."""
+    kind, val = parse_around_spec(spec)
+    by_m = {int(m["beat"]): m for m in motion}
+    if kind == "beat":
+        beat = int(val)
+        if beat not in by_m:
+            raise SystemExit(f"glance: beat {beat} not found (0..{len(motion)-1})")
+        return beat, f"beat {beat}"
+
+    target_t = float(val)
+    # nearest beat by absolute time distance
+    best = None
+    best_d = None
+    for m in motion:
+        t = float(m.get("t") or 0)
+        d = abs(t - target_t)
+        if best is None or d < best_d:
+            best = int(m["beat"])
+            best_d = d
+    if best is None:
+        raise SystemExit("glance: empty motion.jsonl")
+    note = f"t={target_t:.3f}s → nearest beat {best} (Δ{best_d:.3f}s)"
+    return best, note
+
+
 def cmd_glance(args: argparse.Namespace) -> None:
     """Re-sample a local time window at finer interval (directed glance).
 
@@ -1678,9 +3032,15 @@ def cmd_glance(args: argparse.Namespace) -> None:
         sys.exit("glance: run perceive first (no motion.jsonl)")
 
     motion = [json.loads(l) for l in motion_path.read_text().splitlines() if l]
+    around_beat, around_note = resolve_around_beat(motion, str(args.around))
     by_m = {int(m["beat"]): m for m in motion}
-    if args.around not in by_m:
-        sys.exit(f"glance: beat {args.around} not found (0..{len(motion)-1})")
+    if around_beat not in by_m:
+        sys.exit(f"glance: beat {around_beat} not found (0..{len(motion)-1})")
+
+    # Keep rest of glance code on args.around as int beat
+    args.around = around_beat
+    if around_note.startswith("t="):
+        print(f"glance: resolved --around → {around_note}")
 
     anchor = by_m[args.around]
     t_center = float(anchor.get("t") or 0)
@@ -1713,7 +3073,7 @@ def cmd_glance(args: argparse.Namespace) -> None:
             "-q:v", "2",
             str(fdir / "g%03d.jpg"),
         ])
-    frames = sorted(fdir.glob("g*.jpg"))
+    frames = numeric_frames(fdir, "g*.jpg")
     if len(frames) < 2:
         sys.exit(
             f"glance: need ≥2 frames, got {len(frames)} "
@@ -1785,6 +3145,7 @@ def cmd_glance(args: argparse.Namespace) -> None:
         prev_energy = float(stats.get("energy", 0))
 
     fine_motion = apply_fade_detection(fine_motion)
+    fine_motion = apply_paired_cut_merge(fine_motion)
     fine_motion = apply_strobe_detection(fine_motion, frames, fine_iv)
     write_jsonl(gdir / "motion.jsonl", fine_motion)
     kinds = Counter(m.get("kind", "?") for m in fine_motion)
@@ -2053,6 +3414,249 @@ def cmd_summary(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2))
 
 
+def cmd_strip(args: argparse.Namespace) -> None:
+    workdir = Path(args.workdir)
+    p = build_strip(
+        workdir,
+        args.beat,
+        pre=args.pre,
+        post=args.post,
+        height=args.height,
+    )
+    if p is None:
+        sys.exit("strip: not enough frames around that beat")
+    print(f"strip: beat {args.beat} → {p}")
+
+
+def recompute_pixel_channels(motion: list[dict], frames: list[Path]) -> int:
+    """Fill missing shape/grain/layout on beats from preserved frames.
+
+    Rescore's contract is honesty about absence; this narrows the absence:
+    when frames/ survived, the pixel channels are computable without
+    re-ingest (the cut audit already re-reads frames on the same terms).
+    Only missing channels are filled — existing readings are never rewritten.
+    """
+    from PIL import Image
+    import numpy as np
+
+    framedir = frames[0].parent
+    by_name = {p.name: p for p in frames}
+    n_new = 0
+    for i, m in enumerate(motion):
+        if i == 0 or m.get("kind") == "OPEN":
+            continue
+        needs = (
+            m.get("shape") is None
+            or m.get("grain") is None
+            or m.get("layout") is None
+            or (m.get("shape") or {}).get("edge_contact") is None
+        )
+        if not needs:
+            continue
+        prev_p = by_name.get(m.get("from_frame") or "") or frames[i - 1]
+        curr_p = by_name.get(m.get("to_frame") or "") or frames[i]
+        if not (prev_p.exists() and curr_p.exists()):
+            continue
+        had = (
+            m.get("shape") is not None,
+            m.get("grain") is not None,
+            m.get("layout") is not None,
+        )
+        a = Image.open(prev_p).convert("L")
+        b = Image.open(curr_p).convert("L")
+        if a.size != b.size:
+            b = b.resize(a.size)
+        arr = np.abs(
+            np.asarray(b, dtype=np.float32) - np.asarray(a, dtype=np.float32)
+        )
+        mask = arr > 12
+        if m.get("shape") is None or (m.get("shape") or {}).get("edge_contact") is None:
+            try:
+                shape = m.get("shape") or mask_shape(mask)
+            except Exception:
+                shape = None
+            if shape is not None:
+                shape["edge_contact"] = round(mask_edge_contact(mask), 3)
+                if shape["edge_contact"] > 0.5 and shape["largest_frac"] > 0.6:
+                    shape["frame_floor"] = True
+            m["shape"] = shape
+        if m.get("grain") is None:
+            try:
+                m["grain"] = grain_stats(b, mask)
+            except Exception:
+                m["grain"] = None
+        if m.get("layout") is None:
+            try:
+                m["layout"] = frame_layout(
+                    np.asarray(b.resize((96, 54)), dtype=np.float32)
+                )
+            except Exception:
+                m["layout"] = None
+        now = (
+            m.get("shape") is not None,
+            m.get("grain") is not None,
+            m.get("layout") is not None,
+        )
+        if any(n and not h for h, n in zip(had, now)):
+            n_new += 1
+    return n_new
+
+
+def cmd_rescore(args: argparse.Namespace) -> None:
+    """Re-run classification + post-passes over an existing residue.
+
+    The upgrade path for shelved rows: raw per-beat stats in motion.jsonl are
+    preserved by ingest, so kinds, audits, quadrants, grammar, summary, score
+    and strips can all be rebuilt without re-downloading or re-extracting.
+    Old runs lack shape/layout (those need motion_stats over frames) — noted,
+    not faked.
+    """
+    workdir = Path(args.workdir)
+    m_path = workdir / "motion.jsonl"
+    if not m_path.exists():
+        sys.exit(f"rescore: no motion.jsonl in {workdir}")
+    words = [
+        json.loads(l)
+        for l in (workdir / "words.jsonl").read_text().splitlines()
+        if l
+    ] if (workdir / "words.jsonl").exists() else []
+    motion = [json.loads(l) for l in m_path.read_text().splitlines() if l]
+    meta = {}
+    if (workdir / "meta.json").exists():
+        meta = json.loads((workdir / "meta.json").read_text())
+    interval = float(meta.get("interval") or 0) or None
+    stamp = workdir / "frames" / ".interval"
+    if interval is None and stamp.exists():
+        try:
+            interval = float(stamp.read_text().strip())
+        except ValueError:
+            interval = None
+    if interval is None:
+        interval = 1.0
+    frames = numeric_frames(workdir / "frames")
+
+    old_summary = {}
+    if (workdir / "summary.json").exists():
+        try:
+            old_summary = json.loads((workdir / "summary.json").read_text())
+        except json.JSONDecodeError:
+            old_summary = {}
+    old_g = (old_summary.get("grammar") or {}).get("label")
+    old_kc = old_summary.get("kind_counts") or {}
+
+    derived = (
+        "kind_alt", "kind_alt_why", "cut_audit", "bridge_sim", "flank_sims",
+        "motion_audit", "quadrant", "paired_cut", "paired_cut_tail",
+        "paired_with_beat", "fade_direction", "layout_shift", "layout_note",
+        "frame_sim_lag2",
+    )
+    prev_e: float | None = None
+    for m in motion:
+        for key in derived:
+            m.pop(key, None)
+        if m.get("kind") == "OPEN" or m.get("feel") == "open" or m.get("note"):
+            m["kind"] = "OPEN"
+            m["kind_why"] = "no prior frame"
+            m["kind_confidence"] = 1.0
+            prev_e = 0.0
+            continue
+        kd = classify_kind_detail(
+            float(m.get("energy", 0)),
+            float(m.get("active_frac", 0)),
+            m.get("band_energy"),
+            prev_energy=prev_e,
+            frame_sim=m.get("frame_sim"),
+        )
+        m.update(kd)
+        prev_e = float(m.get("energy", 0))
+
+    motion = apply_fade_detection(motion)
+    motion = apply_paired_cut_merge(motion)
+    frames_ok = len(frames) == len(motion)
+    if frames_ok:
+        motion = apply_strobe_detection(motion, frames, interval)
+        motion = apply_cut_audit(motion, frames, interval)
+        motion = apply_motion_audit(motion, frames, interval)
+    else:
+        print(
+            f"rescore: WARNING frames ({len(frames)}) ≠ beats ({len(motion)}) — "
+            f"strobe/audit passes skipped (no bridge available)",
+            file=sys.stderr,
+        )
+    if frames_ok:
+        try:
+            n_new = recompute_pixel_channels(motion, frames)
+            if n_new:
+                print(f"rescore: pixel channels (shape/grain/layout) computed "
+                      f"on {n_new} beats from preserved frames")
+        except Exception as exc:  # noqa: BLE001
+            print(f"rescore: pixel-channel pass failed ({exc})", file=sys.stderr)
+    motion = apply_quadrants(motion)
+    motion = apply_layout_guard(motion)
+
+    title = meta.get("title", workdir.name)
+    source = meta.get("source", old_summary.get("source", ""))
+    summary = build_summary(title, source, interval, words, motion)
+    if not any(m.get("shape") for m in motion):
+        summary["rescore_note"] = (
+            "rescored from raw stats — shape/grain/layout channels absent "
+            "(they need preserved frames or a full re-ingest)"
+        )
+    stream = build_stream(words, motion)
+
+    write_jsonl(workdir / "motion.jsonl", motion)
+    write_jsonl(workdir / "stream.jsonl", stream)
+    if (workdir / "beats.jsonl").exists():
+        idx = [
+            json.loads(l)
+            for l in (workdir / "beats.jsonl").read_text().splitlines()
+            if l
+        ]
+        by_m = {int(m["beat"]): m for m in motion}
+        for row in idx:
+            mm = by_m.get(int(row.get("beat", -1)))
+            if mm:
+                row["motion_kind"] = mm.get("kind")
+                row["motion_feel"] = mm.get("feel")
+                row["kind_confidence"] = mm.get("kind_confidence")
+                row.pop("frame_floor", None)
+                row.update(project_pixel_channels(mm))
+        write_jsonl(workdir / "beats.jsonl", idx)
+    if frames_ok and not args.no_strips:
+        try:
+            made = auto_strips(workdir, motion)
+            if made:
+                summary["strips"] = made
+        except Exception as exc:  # noqa: BLE001
+            print(f"rescore: strips failed ({exc})", file=sys.stderr)
+    (workdir / "summary.json").write_text(json.dumps(summary, indent=2))
+    (workdir / "score.md").write_text(
+        render_md(title, source, interval, words, motion, summary),
+        encoding="utf-8",
+    )
+    if meta:
+        meta["kind_counts"] = summary["kind_counts"]
+        meta["grammar"] = summary["grammar"]
+        meta["rescored"] = True
+        (workdir / "meta.json").write_text(json.dumps(meta, indent=2))
+
+    audit = summary.get("cut_audit") or {}
+    g = summary["grammar"]
+    glabel = g["label"] + (f"?{g['best_guess']}" if g.get("best_guess") else "")
+    jumps_old = old_kc.get("JUMP_CUT", 0) + old_kc.get("HARD_CHANGE", 0)
+    kc = summary["kind_counts"]
+    jumps_new = kc.get("JUMP_CUT", 0) + kc.get("HARD_CHANGE", 0)
+    print(
+        f"rescore: {len(motion)} beats @ {interval}s | "
+        f"grammar {old_g or '?'} → {glabel} (fit={g.get('fit')}) | "
+        f"jumps {jumps_old} → {jumps_new} | "
+        f"audit alleged={audit.get('alleged',0)} verified={audit.get('verified',0)} "
+        f"demoted={audit.get('demoted_world_hold',0)} churn={audit.get('churn_at_floor',0)} | "
+        f"quadrants={summary.get('quadrant_counts')} | "
+        f"-> {workdir}/summary.json + score.md rebuilt"
+    )
+
+
 def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "walk":
         ap = argparse.ArgumentParser(prog="perceive.py walk")
@@ -2069,6 +3673,14 @@ def main() -> None:
             "--interesting",
             action="store_true",
             help="cuts, energy peaks, speech-disagreement, low-confidence kinds",
+        )
+        ap.add_argument(
+            "--rare-motion",
+            action="store_true",
+            help=(
+                "motion-in-stillness: rank LOCAL_MOVE/STIR by surrounding HOLD density "
+                "(not cut-biased; Isaac La Jetée field note)"
+            ),
         )
         ap.add_argument(
             "--speech-disagreement",
@@ -2105,6 +3717,34 @@ def main() -> None:
         cmd_summary(args)
         return
 
+    if len(sys.argv) >= 2 and sys.argv[1] == "rescore":
+        ap = argparse.ArgumentParser(
+            prog="perceive.py rescore",
+            description=(
+                "Re-run classification + audits over an existing residue "
+                "(upgrade path for shelved rows; no re-download/re-extract)"
+            ),
+        )
+        ap.add_argument("workdir")
+        ap.add_argument("--no-strips", action="store_true", help="skip auto frame strips")
+        args = ap.parse_args(sys.argv[2:])
+        cmd_rescore(args)
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "strip":
+        ap = argparse.ArgumentParser(
+            prog="perceive.py strip",
+            description="Ordered frame strip around a beat (sequences convey movement)",
+        )
+        ap.add_argument("workdir")
+        ap.add_argument("--beat", type=int, required=True)
+        ap.add_argument("--pre", type=int, default=2, help="beats before (default 2)")
+        ap.add_argument("--post", type=int, default=3, help="beats after (default 3)")
+        ap.add_argument("--height", type=int, default=180, help="tile height px")
+        args = ap.parse_args(sys.argv[2:])
+        cmd_strip(args)
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "glance":
         ap = argparse.ArgumentParser(
             prog="perceive.py glance",
@@ -2113,9 +3753,11 @@ def main() -> None:
         ap.add_argument("workdir")
         ap.add_argument(
             "--around",
-            type=int,
             required=True,
-            help="parent beat index to center the glance on",
+            help=(
+                "parent beat index OR time: N | Ns | MM:SS | H:MM:SS | 21m25s "
+                "(time resolves to nearest beat)"
+            ),
         )
         ap.add_argument(
             "--interval",
@@ -2215,6 +3857,7 @@ def main() -> None:
     ap.add_argument("--ocr", action="store_true", help="enable tesseract SHOWN (slow)")
     ap.add_argument("--no-words", action="store_true", help="motion-only (skip captions)")
     ap.add_argument("--no-ascii", action="store_true", help="skip writing ascii maps")
+    ap.add_argument("--no-strips", action="store_true", help="skip auto frame strips")
     ap.add_argument("--force-frames", action="store_true", help="re-extract frames")
     ap.add_argument(
         "--page",
