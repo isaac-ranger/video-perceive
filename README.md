@@ -39,9 +39,18 @@ CLI entry points after install: `video-perceive` and `vp`.
 ## Quick start
 
 ```bash
+# Probe BEFORE ingest — is this file the work?
+video-perceive probe ./source.mkv          # or a workdir containing source.*
+video-perceive probe ./source.mkv --json
+
 # Ingest
 video-perceive 'https://www.youtube.com/watch?v=VIDEO' --workdir ./out --interval 0.5
 video-perceive ./clip.mp4 --workdir ./out --interval 0.5 --no-words
+
+# Watch it — ordered contact sheets + an index pairing pages with what is said
+video-perceive contact ./out --step 6
+video-perceive contact ./out --start 2:47 --end 29:29 --step 6 --gamma 1.6
+video-perceive contact ./out --out ./sheets     # leave another agent's residue alone
 
 # Summary / walk
 video-perceive summary ./out
@@ -105,6 +114,12 @@ Each beat may carry `kind_why`, `kind_alt` / `kind_alt_why`, `kind_confidence`, 
 **Framing floor.** When the active mask presses the frame border (`edge_contact > 0.5`) while one component dominates (`largest_frac > 0.6`), the beat is stamped `frame_floor` and `summary.reach.framing_floor` says so: the subject exceeds the window there, and whole-object claims (one mass vs many, full extent) are out of reach on those beats. Close-up-heavy footage fires this often — that is the stamp reading true, not an anomaly.
 
 **Reach.** `summary.reach` states the sampling floor, the cut-rate floor, the framing floor, and the linear-time-base assumption on every run. A null at this layer is a statement about the read's reach, not about the film.
+
+**Reach: WORDS** (`summary.reach.words`) — a blank WORDS channel now says *why* it is blank: `present` · `empty_source_present` (a source was read and carried no text) · `empty_no_source` (no captions found, no OCR run) · `empty_undetermined` · `absent`. This matters because `speech_frac = 0.0` does not merely lower a score — it removes `montage_over_speech` and `pedagogical_pulse` from the option set, so the grammar is then chosen from what remains and reported with confidence. The specimen: a 3661-beat read of a narrated film whose narration was in the audio the whole time, returned `jump_cut_montage` at 0.66 and flagged nothing.
+
+**Probe.** `probe` is the pre-flight, and it exists because the same file was a Spanish television broadcast *containing* the film — 4 minutes of car advert and studio host at the head, a minute of colour advertising at the tail, ~18% of the beats not the work at all. It reports duration, streams, caption availability, colour-discordant spans (head, interior, tail), and static overlay cells. It reports; it does not decide. Contamination that matches the body's colourness stays invisible to it, and it says so.
+
+**Contact sheets.** `contact` is the playback surface. `strip` shows a few frames around one beat and `glance` re-samples one moment; neither lets anyone see the film, and reading only the audited cuts is reading the instrument's opinion of the film rather than the film. `contact` writes ordered pages with clock and beat burned in, plus `INDEX.md` pairing each page with the SAID text spoken over it — so an agent reads one small file and opens only the pages it needs. `--gamma` lifts a dark transfer, and every lifted page is stamped as not-faithful on the page and in the index.
 
 **Grammar** (`summary.json`) — always `status=hypothesis` with `fit`; abstains to `unclassified` (+`best_guess`) below 0.5:  
 `music_video_montage` · `montage_over_speech` · `jump_cut_montage` · `continuous_rewrite` · `pedagogical_pulse` · `trajectory_or_scene` · `stills_advanced_by_cuts` · `continuous_or_damaged_take` · `mixed`

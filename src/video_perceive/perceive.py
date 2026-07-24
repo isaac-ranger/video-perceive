@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -2009,12 +2010,83 @@ def project_pixel_channels(m: dict) -> dict:
     return out
 
 
+def words_reach(words: list[dict], words_source: str | None = None) -> dict:
+    """State what the WORDS channel could have carried, not just what it did.
+
+    A film whose narration is in the audio with no caption track and no OCR
+    pass yields the same artifact as a silent film: every beat blank,
+    speech_frac 0.0. Downstream that is not a low score — it removes
+    montage_over_speech and pedagogical_pulse from the option set entirely,
+    so the grammar label is then chosen from what remains and reported with
+    confidence. Nothing in the residue says the choice was made blind.
+
+    Isaac's La Jetee residue (demo-8nkX68NZtm0, 2026-07-13) is the specimen:
+    3661 beats, 0 with speech, and the source carried a full French narration
+    track the whole time. The read returned jump_cut_montage at 0.66 and
+    flagged nothing. Builder, 2026-07-24.
+
+    `words_source` is what the ingest actually found ("captions", "ocr",
+    "none"); callers that do not know pass None and get an undetermined
+    stamp rather than a guess.
+    """
+    if not words:
+        return {
+            "status": "absent",
+            "carried": None,
+            "note": "no WORDS channel was built; every speech-dependent reading is out of reach",
+        }
+    carried = sum(
+        1 for w in words if (w.get("said") or "").strip() or (w.get("shown") or "").strip()
+    )
+    if carried:
+        return {
+            "status": "present",
+            "carried": carried,
+            "note": None,
+        }
+    blind = (
+        "speech-bearing grammars (montage_over_speech, pedagogical_pulse) are "
+        "unreachable at speech_frac 0.0 — any grammar reported for this read was "
+        "selected from a reduced option set, and its confidence does not price "
+        "the missing channel"
+    )
+    if words_source in (None, "", "unknown"):
+        return {
+            "status": "empty_undetermined",
+            "carried": 0,
+            "note": (
+                "channel is blank and the ingest did not record whether a caption "
+                f"or OCR source existed — a silent film and an unread narration "
+                f"are indistinguishable here. {blind}"
+            ),
+        }
+    if words_source == "none":
+        return {
+            "status": "empty_no_source",
+            "carried": 0,
+            "note": (
+                "channel is blank because no caption track was found and no OCR "
+                f"pass was run — this is a statement about the read, NOT evidence "
+                f"the source is silent. Try --ocr, or supply captions. {blind}"
+            ),
+        }
+    return {
+        "status": "empty_source_present",
+        "carried": 0,
+        "note": (
+            f"a {words_source} source was read and carried no text — the content "
+            f"itself is speechless on this channel. {blind}"
+        ),
+    }
+
+
 def build_summary(
     title: str,
     source: str,
     interval: float,
     words: list[dict],
     motion: list[dict],
+    words_source: str | None = None,
 ) -> dict:
     kinds = Counter(m.get("kind", "?") for m in motion)
     energies = [m.get("energy", 0) for m in motion if "energy" in m]
@@ -2139,6 +2211,7 @@ def build_summary(
                 "rate figure (see author_index for an in-video counter when one exists)"
             ),
             "framing_floor": framing_floor_line,
+            "words": words_reach(words, words_source),
             "note": (
                 "a null at this layer is a statement about this read's reach, "
                 "not about the film"
@@ -2670,7 +2743,18 @@ def cmd_perceive(args: argparse.Namespace) -> None:
             if words:
                 words[0]["open_frame_ocr_hint"] = open_ocr[:300]
 
-    summary = build_summary(title, meta_source, args.interval, words, motion)
+    # what the WORDS channel was actually offered, so a blank channel can say
+    # whether it was blank for want of a source or because nothing was said
+    if srt is not None and Path(srt).exists():
+        words_source = "captions"
+    elif getattr(args, "ocr", False):
+        words_source = "ocr"
+    else:
+        words_source = "none"
+
+    summary = build_summary(
+        title, meta_source, args.interval, words, motion, words_source=words_source
+    )
     summary["burned_in_text_likely"] = burned_in
     if burned_in:
         summary["open_frame_ocr_hint"] = open_ocr[:300]
@@ -3428,6 +3512,520 @@ def cmd_strip(args: argparse.Namespace) -> None:
     print(f"strip: beat {args.beat} → {p}")
 
 
+def clock(t: float) -> str:
+    """M:SS for a seconds offset."""
+    return f"{int(t) // 60}:{int(t) % 60:02d}"
+
+
+def lift_levels(im, gamma: float, contrast: float):
+    """Raise a dark transfer so a viewer can see it.
+
+    Kept deliberately crude and always announced on the tile: a lifted sheet
+    is no longer evidence about the source's luminance, and a viewer who
+    cannot tell a lifted page from a faithful one has been handed a lie with
+    good intentions.
+    """
+    from PIL import Image, ImageEnhance
+    import numpy as np
+
+    a = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+    a = np.power(np.clip(a, 0.0, 1.0), 1.0 / max(gamma, 1e-6))
+    out = Image.fromarray((np.clip(a, 0, 1) * 255).astype("uint8"), "RGB")
+    if contrast and contrast != 1.0:
+        out = ImageEnhance.Contrast(out).enhance(contrast)
+    return out
+
+
+def build_contact_sheets(
+    workdir: Path,
+    *,
+    start_beat: int = 0,
+    end_beat: int | None = None,
+    step: int = 1,
+    cols: int = 6,
+    per_page: int = 60,
+    height: int = 180,
+    gamma: float = 1.0,
+    contrast: float = 1.0,
+    outdir: Path | None = None,
+) -> list[Path]:
+    """Ordered contact sheets over a span of an existing residue.
+
+    `strip` shows a handful of frames around one beat; `glance` re-samples one
+    moment. Neither lets anyone see the film. Watching a 25-minute residue
+    frame by frame is not available to an agent (3661 reads), and reading only
+    the audited cuts is reading the instrument's opinion of the film rather
+    than the film. A contact sheet is the middle: every sampled beat, in order,
+    clock and beat burned in, ~60 to a page — 13 pages for a feature.
+
+    Frames come from numeric_frames, so the t1000.jpg sort defect cannot
+    reorder a page. Builder, 2026-07-24.
+    """
+    from PIL import Image, ImageDraw
+
+    frames = numeric_frames(workdir / "frames")
+    if not frames:
+        return []
+    interval = read_interval(workdir)
+    n = len(frames)
+    end = n if end_beat is None else min(end_beat, n)
+    start = max(0, start_beat)
+    if step < 1:
+        step = 1
+    idxs = list(range(start, end, step))
+    if not idxs:
+        return []
+
+    outdir = outdir or (workdir / "contact")
+    outdir.mkdir(parents=True, exist_ok=True)
+    for stale in outdir.glob("page_*.jpg"):
+        stale.unlink()
+
+    lifted = gamma != 1.0 or contrast != 1.0
+    label_h = 15
+    pages: list[Path] = []
+    for pageno, base in enumerate(range(0, len(idxs), per_page), start=1):
+        chunk = idxs[base:base + per_page]
+        tiles = []
+        for j in chunk:
+            im = Image.open(frames[j]).convert("RGB")
+            w = max(1, int(im.width * height / im.height))
+            im = im.resize((w, height))
+            if lifted:
+                im = lift_levels(im, gamma, contrast)
+            tile = Image.new("RGB", (w, height + label_h), (0, 0, 0))
+            tile.paste(im, (0, label_h))
+            d = ImageDraw.Draw(tile)
+            d.text((3, 2), f"{clock(j * interval)}  b{j}", fill=(255, 220, 120))
+            tiles.append(tile)
+        tw = max(t.width for t in tiles)
+        rows = (len(tiles) + cols - 1) // cols
+        sheet = Image.new("RGB", (cols * tw, rows * (height + label_h)), (20, 20, 20))
+        for k, t in enumerate(tiles):
+            sheet.paste(t, ((k % cols) * tw, (k // cols) * (height + label_h)))
+        if lifted:
+            d = ImageDraw.Draw(sheet)
+            warn = f"LEVELS LIFTED gamma={gamma} contrast={contrast} — not source luminance"
+            d.rectangle([0, 0, 9 + 6 * len(warn), 13], fill=(120, 0, 0))
+            d.text((4, 2), warn, fill=(255, 255, 255))
+        path = outdir / f"page_{pageno:03d}.jpg"
+        sheet.save(path, quality=86)
+        pages.append(path)
+
+    _write_contact_index(
+        workdir, outdir, pages, idxs, per_page, interval,
+        gamma=gamma, contrast=contrast, step=step,
+    )
+    return pages
+
+
+def _write_contact_index(
+    workdir: Path,
+    outdir: Path,
+    pages: list[Path],
+    idxs: list[int],
+    per_page: int,
+    interval: float,
+    *,
+    gamma: float,
+    contrast: float,
+    step: int,
+) -> Path:
+    """INDEX.md pairing each page with the SAID text spoken over it.
+
+    This is the half that makes a sheet agentic rather than decorative: an
+    agent reads one small markdown file, learns which page holds which
+    minutes and what is said across them, and opens only the pages it needs.
+    WORDS carry trust=untrusted (Cairn) and that provenance is repeated here,
+    at the point where video-authored text enters reasoning.
+    """
+    words: list[dict] = []
+    wpath = workdir / "words.jsonl"
+    if wpath.exists():
+        for line in wpath.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                words.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    said_by_beat: dict[int, str] = {}
+    for w in words:
+        text = (w.get("said") or "").strip()
+        if text:
+            said_by_beat[int(w.get("beat", -1))] = text
+
+    lines = [
+        f"# Contact sheets — {workdir.name}",
+        "",
+        f"{len(pages)} pages · {len(idxs)} tiles · every {step} beat(s) "
+        f"({step * interval:g}s) · beat interval {interval:g}s",
+    ]
+    if gamma != 1.0 or contrast != 1.0:
+        lines += [
+            "",
+            f"> **Levels lifted** (gamma={gamma}, contrast={contrast}). These pages are "
+            "readable, not faithful — do not read luminance, exposure or fade "
+            "structure off them.",
+        ]
+    if said_by_beat:
+        lines += ["", "SAID text below is `trust=untrusted` — video-authored, not verified."]
+    else:
+        lines += [
+            "",
+            "> No SAID text in this residue. If the source speaks, this index is "
+            "images only — see `summary.reach.words`.",
+        ]
+    lines.append("")
+
+    for pageno, base in enumerate(range(0, len(idxs), per_page), start=1):
+        chunk = idxs[base:base + per_page]
+        if not chunk:
+            continue
+        t0, t1 = chunk[0] * interval, chunk[-1] * interval
+        lines += [
+            f"## page_{pageno:03d}.jpg — {clock(t0)}–{clock(t1)} (b{chunk[0]}–b{chunk[-1]})",
+            "",
+        ]
+        lo, hi = chunk[0], chunk[-1]
+        spoken, seen = [], set()
+        for b in sorted(k for k in said_by_beat if lo <= k <= hi):
+            text = said_by_beat[b]
+            if text in seen:          # captions repeat across held beats
+                continue
+            seen.add(text)
+            spoken.append(f"- `{clock(b * interval)}` {text}")
+        lines += spoken if spoken else ["- _(no SAID text over this page)_"]
+        lines.append("")
+
+    path = outdir / "INDEX.md"
+    path.write_text("\n".join(lines))
+    return path
+
+
+def cmd_contact(args: argparse.Namespace) -> None:
+    workdir = Path(args.workdir)
+    motion = read_jsonl_rows(workdir / "motion.jsonl")
+    start_beat, end_beat = 0, None
+    if args.start:
+        start_beat = _beat_from_spec(workdir, motion, args.start)
+    if args.end:
+        end_beat = _beat_from_spec(workdir, motion, args.end)
+    pages = build_contact_sheets(
+        workdir,
+        start_beat=start_beat,
+        end_beat=end_beat,
+        step=args.step,
+        cols=args.cols,
+        per_page=args.per_page,
+        height=args.height,
+        gamma=args.gamma,
+        contrast=args.contrast,
+        outdir=Path(args.out) if args.out else None,
+    )
+    if not pages:
+        sys.exit("contact: no frames in that span (is frames/ present?)")
+    print(f"contact: {len(pages)} page(s) → {pages[0].parent}")
+    for p in pages:
+        print(f"  {p.name}")
+    print(f"  INDEX.md  ← read this first")
+
+
+def _beat_from_spec(workdir: Path, motion: list[dict], spec: str) -> int:
+    """Beat index from a beat number or a time spec, without needing motion.jsonl."""
+    kind, val = parse_around_spec(spec)
+    if kind == "beat":
+        return int(val)
+    if motion:
+        beat, _ = resolve_around_beat(motion, spec)
+        return beat
+    return int(round(float(val) / read_interval(workdir)))
+
+
+def read_interval(workdir: Path) -> float:
+    """Beat interval for a residue: the extraction stamp, then meta, then 1.0s."""
+    stamp = workdir / "frames" / ".interval"
+    if stamp.exists():
+        try:
+            return float(stamp.read_text().strip())
+        except ValueError:
+            pass
+    meta = workdir / "meta.json"
+    if meta.exists():
+        try:
+            v = json.loads(meta.read_text()).get("interval")
+            if v:
+                return float(v)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    summ = workdir / "summary.json"
+    if summ.exists():
+        try:
+            v = json.loads(summ.read_text()).get("interval")
+            if v:
+                return float(v)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return 1.0
+
+
+def read_jsonl_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def content_span_from_colour(
+    body, step_s: float, modal_is_colour: bool
+) -> dict:
+    """Longest run of samples matching the body's colourness, plus what it drops.
+
+    Split out of probe_source so it is testable without ffmpeg: this is the
+    part that decides which minutes of a file are the work, and a decision
+    that important should not need a video to exercise.
+
+    Smoothing is load-bearing. A first-discordant-sample scan is defeated by
+    one stray frame, and on La Jetee's broadcast the opening car advert
+    contains a ~15s monochrome dip — an unsmoothed head-trim stopped at 0:15
+    and passed four minutes of Spanish television through as "the film".
+    """
+    import numpy as np
+
+    body = np.asarray(body, dtype=bool)
+    n = len(body)
+    if n == 0:
+        return {"start_s": 0.0, "end_s": 0.0, "start_clock": "0:00",
+                "end_clock": "0:00", "trimmed_head_s": 0.0, "trimmed_tail_s": 0.0,
+                "discordant_segments": [], "basis": "no samples",
+                "note": "no samples; nothing measured"}
+
+    win = max(3, int(round(9.0 / step_s)) | 1)
+    pad = win // 2
+    padded = np.pad(body.astype(np.float32), pad, mode="edge")
+    smooth = np.array([np.median(padded[i:i + win]) for i in range(n)]) > 0.5
+
+    runs, i = [], 0
+    while i < n:
+        j = i
+        while j < n and smooth[j] == smooth[i]:
+            j += 1
+        runs.append((i, j, bool(smooth[i])))
+        i = j
+    # Span the FIRST to the LAST substantial body run, not merely the longest.
+    # Taking the longest alone truncates any work with a mid-roll break: two
+    # equal halves either side of an advert would report only the first half
+    # as content, and report it confidently. "Substantial" is relative to the
+    # longest run, which is what keeps a 15s dip inside an advert from
+    # anchoring the head.
+    body_runs = [r for r in runs if r[2]]
+    if body_runs:
+        longest = max(b - a for a, b, _ in body_runs)
+        keep = [r for r in body_runs if (r[1] - r[0]) >= 0.25 * longest]
+        head, tail = keep[0][0], keep[-1][1]
+    else:
+        head, tail = 0, n
+
+    discordant = [
+        {
+            "start_clock": clock(a * step_s),
+            "end_clock": clock(b * step_s),
+            "seconds": round((b - a) * step_s, 1),
+            "is": "colour" if not modal_is_colour else "monochrome",
+            "where": "head" if b <= head else ("tail" if a >= tail else "interior"),
+        }
+        for a, b, is_body in runs
+        if not is_body and (b - a) * step_s >= 5.0
+    ]
+
+    return {
+        "start_s": round(head * step_s, 2),
+        "end_s": round(tail * step_s, 2),
+        "start_clock": clock(head * step_s),
+        "end_clock": clock(tail * step_s),
+        "trimmed_head_s": round(head * step_s, 2),
+        "trimmed_tail_s": round((n - tail) * step_s, 2),
+        "discordant_segments": discordant,
+        "basis": (
+            f"longest run matching the modal colourness "
+            f"({'colour' if modal_is_colour else 'monochrome'}), median-smoothed "
+            f"over {win} samples ({win * step_s:.1f}s); resolved to {step_s:.2f}s"
+        ),
+        "note": (
+            "colour-discordant spans are usually not the work — adverts, broadcast "
+            "idents, channel bumpers. A hypothesis, not a cut list: an interior span "
+            "may well be part of the film. Verify before trusting it, and note that "
+            "contamination matching the body's colourness is invisible to this test."
+            if discordant
+            else "no colour-discordant span found; this does not rule out "
+                 "contamination that matches the body's colourness"
+        ),
+    }
+
+
+def probe_source(video: Path, samples: int = 120, grid: int = 8) -> dict:
+    """Pre-flight a source before spending an ingest on it: is this the film?
+
+    Isaac's La Jetee residue is the case this exists for. The file is a
+    Spanish television broadcast *containing* the film: 4:19 of car advert
+    and studio host at the head, ~1:10 of colour advertising at the tail.
+    About 18% of the 3661 beats are not Marker. The tail is in COLOUR against
+    a black-and-white film, and the container ran 30:30 for a 28-minute
+    picture — both visible before a single frame was read, and neither was
+    looked at. The same read then reported 748 jump cuts with confidence.
+
+    Reports; does not decide. Every field here is a hypothesis a human or
+    agent can act on, and the spans are stated with the sampling floor that
+    produced them. Builder, 2026-07-24.
+    """
+    from PIL import Image
+    import numpy as np
+
+    which_or_exit("ffmpeg")
+    which_or_exit("ffprobe")
+
+    out: dict = {"source": str(video), "samples": samples}
+
+    streams = run([
+        "ffprobe", "-v", "error", "-show_entries",
+        "stream=index,codec_type,codec_name:stream_tags=language",
+        "-of", "json", str(video),
+    ]).stdout
+    try:
+        sinfo = json.loads(streams).get("streams", [])
+    except json.JSONDecodeError:
+        sinfo = []
+    by_type: dict[str, list] = {}
+    for s in sinfo:
+        by_type.setdefault(s.get("codec_type", "?"), []).append(s)
+    out["streams"] = {k: len(v) for k, v in by_type.items()}
+    out["audio_languages"] = [
+        (s.get("tags") or {}).get("language") for s in by_type.get("audio", [])
+    ]
+    out["subtitle_streams"] = len(by_type.get("subtitle", []))
+
+    dur = video_duration(video) or 0.0
+    out["duration_s"] = round(dur, 2)
+    out["duration_clock"] = clock(dur)
+
+    has_audio = bool(by_type.get("audio"))
+    if has_audio and not by_type.get("subtitle"):
+        out["words_advice"] = (
+            "audio present, no subtitle stream — if this source speaks, the WORDS "
+            "channel will come back EMPTY and every speech-bearing grammar will be "
+            "silently out of reach. Supply captions, run --ocr for burned-in text, "
+            "or transcribe the audio first. Do not force a single language on a "
+            "file that may be multilingual."
+        )
+
+    if dur <= 0:
+        out["note"] = "no duration; colour/overlay analysis skipped"
+        return out
+
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        fps = max(samples / dur, 0.01)
+        run([
+            "ffmpeg", "-v", "error", "-i", str(video),
+            "-vf", f"fps={fps},scale=160:90", "-q:v", "6",
+            str(tdp / "s%05d.jpg"),
+        ])
+        shots = numeric_frames(tdp, "s*.jpg")
+        if not shots:
+            out["note"] = "no frames sampled"
+            return out
+
+        sat, cells = [], []
+        for p in shots:
+            im = Image.open(p).convert("RGB")
+            a = np.asarray(im, dtype=np.float32)
+            # chroma spread: 0 for a greyscale frame whatever its brightness
+            sat.append(float(np.abs(a.max(axis=2) - a.min(axis=2)).mean()))
+            g = np.asarray(im.convert("L").resize((grid * 8, grid * 8)), dtype=np.float32)
+            cells.append(g.reshape(grid, 8, grid, 8).mean(axis=(1, 3)))
+
+        sat_a = np.array(sat)
+        step_s = dur / len(shots)
+        out["sampling_floor_s"] = round(step_s, 3)
+
+        colour = sat_a > 12.0
+        out["colour_frac"] = round(float(colour.mean()), 3)
+        modal_is_colour = bool(colour.mean() > 0.5)
+        body = colour if modal_is_colour else ~colour
+        out["body_is"] = "colour" if modal_is_colour else "monochrome"
+
+        out["content_span"] = content_span_from_colour(
+            body, step_s, modal_is_colour
+        )
+
+        stack = np.stack(cells)
+        var = stack.var(axis=0)
+        floor = float(np.percentile(var, 55)) or 1.0
+        furniture = [
+            {"row": int(r), "col": int(c), "var": round(float(var[r, c]), 2)}
+            for r in range(grid) for c in range(grid)
+            if var[r, c] < floor * 0.10
+        ]
+        out["overlays"] = {
+            "grid": f"{grid}x{grid}",
+            "static_cells": furniture,
+            "note": (
+                "cells that barely vary across the whole file are furniture, not "
+                "film — watermarks, channel bugs, burned-in subtitle bands, "
+                "letterbox. On La Jetee's sleeping sequence the two loudest local "
+                "motion signals were an animated subscribe button and the subtitle "
+                "band. Mask before reading motion."
+            ),
+        }
+
+    return out
+
+
+def cmd_probe(args: argparse.Namespace) -> None:
+    src = Path(args.source)
+    if src.is_dir():
+        for cand in ("source.mp4", "source.mkv", "source.webm"):
+            if (src / cand).exists():
+                src = src / cand
+                break
+    if not src.exists():
+        sys.exit(f"probe: not found: {src}")
+    info = probe_source(src, samples=args.samples)
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return
+    print(f"probe: {info['source']}")
+    print(f"  duration   {info['duration_clock']} ({info['duration_s']}s)")
+    print(f"  streams    {info.get('streams')}  subtitles={info.get('subtitle_streams')}")
+    if info.get("audio_languages"):
+        print(f"  audio lang {info['audio_languages']}")
+    if "content_span" in info:
+        cs = info["content_span"]
+        print(f"  body is    {info['body_is']} (colour_frac={info['colour_frac']})")
+        print(f"  content    {cs['start_clock']} → {cs['end_clock']}"
+              f"  [head -{cs['trimmed_head_s']}s, tail -{cs['trimmed_tail_s']}s]")
+        for d in cs.get("discordant_segments", []):
+            print(f"    {d['where']:8} {d['start_clock']}–{d['end_clock']}"
+                  f"  {d['seconds']}s  {d['is']}")
+        print(f"             {cs['note']}")
+    if info.get("overlays", {}).get("static_cells"):
+        cells = info["overlays"]["static_cells"]
+        print(f"  overlays   {len(cells)} static cell(s) of {info['overlays']['grid']}: "
+              f"{[(c['row'], c['col']) for c in cells[:8]]}")
+    if info.get("words_advice"):
+        print(f"  WORDS      {info['words_advice']}")
+
+
 def recompute_pixel_channels(motion: list[dict], frames: list[Path]) -> int:
     """Fill missing shape/grain/layout on beats from preserved frames.
 
@@ -3743,6 +4341,54 @@ def main() -> None:
         ap.add_argument("--height", type=int, default=180, help="tile height px")
         args = ap.parse_args(sys.argv[2:])
         cmd_strip(args)
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "contact":
+        ap = argparse.ArgumentParser(
+            prog="perceive.py contact",
+            description=(
+                "Ordered contact sheets over a residue — the playback surface. "
+                "Writes contact/page_NNN.jpg plus INDEX.md pairing each page "
+                "with the SAID text spoken over it."
+            ),
+        )
+        ap.add_argument("workdir")
+        ap.add_argument("--start", default=None, help="beat or time (N | 90s | 21:25)")
+        ap.add_argument("--end", default=None, help="beat or time (N | 90s | 21:25)")
+        ap.add_argument("--step", type=int, default=4, help="sample every Nth beat (default 4)")
+        ap.add_argument("--cols", type=int, default=6, help="tiles per row (default 6)")
+        ap.add_argument("--per-page", type=int, default=60, help="tiles per page (default 60)")
+        ap.add_argument("--height", type=int, default=180, help="tile height px")
+        ap.add_argument(
+            "--gamma",
+            type=float,
+            default=1.0,
+            help="lift a dark transfer (try 2.0); pages are then stamped as not-faithful",
+        )
+        ap.add_argument("--contrast", type=float, default=1.0, help="contrast multiplier")
+        ap.add_argument(
+            "--out",
+            default=None,
+            help="write pages here instead of <workdir>/contact (leave another agent's residue alone)",
+        )
+        args = ap.parse_args(sys.argv[2:])
+        cmd_contact(args)
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "probe":
+        ap = argparse.ArgumentParser(
+            prog="perceive.py probe",
+            description=(
+                "Pre-flight a source before ingest: runtime, streams, caption "
+                "availability, colour-discordant head/tail (adverts, idents), "
+                "and static overlay cells (watermarks, subtitle bands)."
+            ),
+        )
+        ap.add_argument("source", help="video file, or a workdir containing source.*")
+        ap.add_argument("--samples", type=int, default=120, help="frames to sample (default 120)")
+        ap.add_argument("--json", action="store_true", help="emit the full report as JSON")
+        args = ap.parse_args(sys.argv[2:])
+        cmd_probe(args)
         return
 
     if len(sys.argv) >= 2 and sys.argv[1] == "glance":
