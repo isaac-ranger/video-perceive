@@ -14,6 +14,8 @@ Usage:
   perceive.py walk <workdir> [--interesting] [--rare-motion] [--kinds JUMP_CUT,…] [--speech-disagreement]
   perceive.py glance <workdir> --around N|Ns|MM:SS [--interval 0.1] [--radius 1.0]
   perceive.py summary <workdir>
+  perceive.py probe <video>                   # pre-read: container, spans, contamination, WORDS reachability
+  perceive.py contact <workdir> [--start N] [--end N] [--step 4] [--cols 6]   # contact sheets: see the residue before walking it
   perceive.py rescore <workdir>               # upgrade a shelved residue: re-audit, no re-ingest
   perceive.py strip <workdir> --beat N        # ordered frame strip (sequences convey movement)
   perceive.py see <workdir> --beat N --note "…" [--which before|after|both]
@@ -3918,10 +3920,49 @@ def probe_source(video: Path, samples: int = 120, grid: int = 8) -> dict:
     out["duration_s"] = round(dur, 2)
     out["duration_clock"] = clock(dur)
 
+    # Sidecar captions are the evidence the ingest path actually resolves
+    # (see the .en.srt candidate list in the ingest branch). Probe used to
+    # read the container's subtitle count and stop, so it warned "WORDS will
+    # come back EMPTY" while source.en.srt sat in the same directory and the
+    # run had carried 43 speech beats. Isaac found it, 2026-07-24. An
+    # instrument that reports on a channel without consulting what is
+    # available to it is the defect probe exists to catch, pointed inward.
+    #
+    # Dedup on the resolved path: the ordered candidates and the glob overlap
+    # (source.mp4 -> source.en.srt is BOTH with_suffix and parent/"source.en.srt"),
+    # and a count that double-reports is the failure this whole fix is about.
+    _cands = [
+        video.with_suffix(".en.srt"),
+        video.with_suffix(".en.vtt"),
+        video.parent / "source.en.srt",
+        video.parent / "source.en.vtt",
+        *sorted(video.parent.glob("*.en.srt")),
+        *sorted(video.parent.glob("*.en.vtt")),
+    ]
+    sidecars: list = []
+    _seen: set = set()
+    for c in _cands:
+        if not c.exists():
+            continue
+        key = c.resolve()
+        if key in _seen:
+            continue
+        _seen.add(key)
+        sidecars.append(c)
+    out["subtitle_sidecars"] = [str(p) for p in sidecars]
+
     has_audio = bool(by_type.get("audio"))
-    if has_audio and not by_type.get("subtitle"):
+    if has_audio and not by_type.get("subtitle") and sidecars:
         out["words_advice"] = (
-            "audio present, no subtitle stream — if this source speaks, the WORDS "
+            f"audio present, no subtitle stream, but {len(sidecars)} caption "
+            f"sidecar(s) resolve beside this file ({sidecars[0].name}) — the WORDS "
+            "channel has a source. This is the post-ingest case; the container "
+            "count alone would have called it empty."
+        )
+    elif has_audio and not by_type.get("subtitle"):
+        out["words_advice"] = (
+            "audio present, no subtitle stream and no caption sidecar beside the "
+            "file — if this source speaks, the WORDS "
             "channel will come back EMPTY and every speech-bearing grammar will be "
             "silently out of reach. Supply captions, run --ocr for burned-in text, "
             "or transcribe the audio first. Do not force a single language on a "
