@@ -36,6 +36,34 @@ PYTHONPATH=src python -m video_perceive --help
 
 CLI entry points after install: `video-perceive` and `vp`.
 
+## When YouTube says no
+
+`fetch` shells out to `yt-dlp`, and in 2026 YouTube treats a bare `yt-dlp`
+the way a nightclub treats sneakers: technically clothing, not getting in.
+The failure tour on a stock box, for the record: default client → HTTP 403 on
+the video stream (captions download fine, which is its own kind of taunt),
+`web` client → "Only images are available" (storyboards; thanks), `tv` → a
+DRM experiment, `ios` → PO-token demands. The tool now surfaces yt-dlp's own
+stderr when this happens — it used to swallow it, which cost a real debugging
+session (field report 2026-08-14) — but it deliberately does **not** pin a
+client or a workaround: whatever works this month rots by next, and a pinned
+workaround is a future bug with a timestamp.
+
+What worked in 2026-08, on one box, with no warranty expressed or implied:
+
+```
+# ~/.config/yt-dlp/config
+--js-runtimes node
+--remote-components ejs:github
+--extractor-args youtube:player_client=mweb
+```
+
+That is: give yt-dlp a JavaScript runtime (deno is its default love language;
+node and bun also speak it), let it fetch its EJS challenge-solver, and use
+the mobile-web client. Keep `yt-dlp` itself current — this recipe expires
+like milk, not wine. Local files skip the whole circus: `video-perceive
+./clip.mp4` never touches the network.
+
 ## Quick start
 
 ```bash
@@ -51,6 +79,10 @@ video-perceive ./clip.mp4 --workdir ./out --interval 0.5 --no-words
 video-perceive contact ./out --step 6
 video-perceive contact ./out --start 2:47 --end 29:29 --step 6 --gamma 1.6
 video-perceive contact ./out --out ./sheets     # leave another agent's residue alone
+
+# Clean prose transcript — folds YouTube's rolling auto-sub window,
+# which otherwise serves every sentence three times like a nervous waiter
+video-perceive transcript ./out --quiet
 
 # Summary / walk
 video-perceive summary ./out
@@ -113,7 +145,7 @@ Each beat may carry `kind_why`, `kind_alt` / `kind_alt_why`, `kind_confidence`, 
 
 **Framing floor.** When the active mask presses the frame border (`edge_contact > 0.5`) while one component dominates (`largest_frac > 0.6`), the beat is stamped `frame_floor` and `summary.reach.framing_floor` says so: the subject exceeds the window there, and whole-object claims (one mass vs many, full extent) are out of reach on those beats. Close-up-heavy footage fires this often — that is the stamp reading true, not an anomaly.
 
-**Reach.** `summary.reach` states the sampling floor, the cut-rate floor, the framing floor, and the linear-time-base assumption on every run. A null at this layer is a statement about the read's reach, not about the film.
+**Reach.** `summary.reach` states the sampling floor, the cut-rate floor, the framing floor, the source resolution, and the linear-time-base assumption on every run. A null at this layer is a statement about the read's reach, not about the film. The resolution entry earned its place the usual way: a 360p screencast's burned-in text was *detected* and *unreadable*, and nothing said the pixel grid was why.
 
 **Reach: WORDS** (`summary.reach.words`) — a blank WORDS channel now says *why* it is blank: `present` · `empty_source_present` (a source was read and carried no text) · `empty_no_source` (no captions found, no OCR run) · `empty_undetermined` · `absent`. This matters because `speech_frac = 0.0` does not merely lower a score — it removes `montage_over_speech` and `pedagogical_pulse` from the option set, so the grammar is then chosen from what remains and reported with confidence. The specimen: a 3661-beat read of a narrated film whose narration was in the audio the whole time, returned `jump_cut_montage` at 0.66 and flagged nothing.
 
@@ -144,6 +176,7 @@ workdir/
   motion/mNNN.txt
   words.jsonl, motion.jsonl, beats.jsonl
   stream.jsonl          # thin dual packets; seen_pair on cuts
+  transcript.txt        # optional: `transcript` verb, rolling captions folded
   seen.jsonl            # optional agent annotations
   summary.json, score.md, meta.json, cursor.json   # canonical residual
   page.json, page.png, page.md   # optional hybrid projection
@@ -163,6 +196,12 @@ a missing key on the thin surface is not a channel that didn't fire):
 `rescore` fills missing shape/grain/layout from preserved `frames/` — old
 residues upgrade without re-download; absence is stamped only when frames are
 gone too.
+
+**Partial ingests refuse to be read.** A workdir carrying `.ingest-incomplete`
+is a crime scene, not a residue — the ingest died mid-run (usually the fetch;
+see the nightclub section above) and every reader verb refuses it with the
+reason instead of walking half a corpse. Re-run the ingest against the same
+workdir; finished pieces are reused.
 
 ## Optional hybrid page
 
