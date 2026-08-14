@@ -2085,8 +2085,9 @@ def words_reach(words: list[dict], words_source: str | None = None) -> dict:
     flagged nothing. Builder, 2026-07-24.
 
     `words_source` is what the ingest actually found ("captions", "ocr",
-    "none"); callers that do not know pass None and get an undetermined
-    stamp rather than a guess.
+    "none"), or "skipped" when --no-words declined to read a source that may
+    exist; callers that do not know pass None and get an undetermined stamp
+    rather than a guess.
     """
     if not words:
         return {
@@ -2109,6 +2110,16 @@ def words_reach(words: list[dict], words_source: str | None = None) -> dict:
         "selected from a reduced option set, and its confidence does not price "
         "the missing channel"
     )
+    if words_source == "skipped":
+        return {
+            "status": "empty_by_request",
+            "carried": 0,
+            "note": (
+                "WORDS was skipped on request (--no-words) — a caption source "
+                f"may exist and was deliberately not read; this says nothing "
+                f"about whether the content speaks. {blind}"
+            ),
+        }
     if words_source in (None, "", "unknown"):
         return {
             "status": "empty_undetermined",
@@ -2746,11 +2757,17 @@ def cmd_perceive(args: argparse.Namespace) -> None:
     workdir = Path(args.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     which_or_exit("ffmpeg")
-    (workdir / INGEST_SENTINEL).write_text("ingest started; not yet complete\n")
+    # The sentinel is written only once a real source is in hand (QA field
+    # report 2026-08-14: written unconditionally, a typo'd local path against
+    # a healthy residue stranded the marker and locked every reader out of an
+    # intact read). URL ingests mark before fetch — a death mid-download must
+    # leave the marker; a bad local path must never touch it.
+    sentinel = workdir / INGEST_SENTINEL
 
     source = args.source
     srt: Path | None = None
     if re.match(r"https?://", source):
+        sentinel.write_text("ingest started; not yet complete\n")
         video, srt = fetch(source, workdir)
         meta_source = source
     else:
@@ -2776,6 +2793,9 @@ def cmd_perceive(args: argparse.Namespace) -> None:
         if srt is None and (workdir / "source.en.srt").exists():
             srt = workdir / "source.en.srt"
         meta_source = str(source)
+
+    # source is real from here (both branches) — mark the residue in-progress
+    sentinel.write_text("ingest started; not yet complete\n")
 
     frames = extract_frames(
         video, workdir / "frames", args.interval, force=args.force_frames
@@ -2815,8 +2835,12 @@ def cmd_perceive(args: argparse.Namespace) -> None:
                 words[0]["open_frame_ocr_hint"] = open_ocr[:300]
 
     # what the WORDS channel was actually offered, so a blank channel can say
-    # whether it was blank for want of a source or because nothing was said
-    if srt is not None and Path(srt).exists():
+    # whether it was blank for want of a source or because nothing was said.
+    # --no-words must NOT report "captions": nothing was read (QA field report
+    # 2026-08-14 — the stamp asserted a deliberately unread source was read).
+    if args.no_words:
+        words_source = "skipped"
+    elif srt is not None and Path(srt).exists():
         words_source = "captions"
     elif getattr(args, "ocr", False):
         words_source = "ocr"
@@ -2914,7 +2938,7 @@ def cmd_perceive(args: argparse.Namespace) -> None:
         print(f"perceive: OPEN OCR hint: {open_ocr[:120].replace(chr(10), ' ')}")
 
     # Canonical residue is on disk — the ingest is whole from here.
-    (workdir / INGEST_SENTINEL).unlink(missing_ok=True)
+    sentinel.unlink(missing_ok=True)
 
     # Hybrid page is optional (JSON/jsonl/score are canonical). Opt in:
     #   perceive.py diagram <workdir>  |  walk --page / --page-only
@@ -3548,18 +3572,31 @@ def fold_rolling_captions(texts: list[str]) -> str:
 
     YouTube auto-captions re-serve each line ~3x inside a two-line rolling
     window; naive concatenation triples the transcript (field report
-    2026-08-14: 38.8k chars of cue text folded to 19.7k of actual speech).
+    2026-08-14: 91.6k chars of cue text folded to 19.8k of actual speech).
     Fold = longest tail/head overlap between consecutive cue texts.
+
+    Guards (QA field report, same day): an unguarded fold manufactured words
+    out of NON-rolling captions ("I see" + "everyone knows" → "I see veryone
+    knows") and ate genuine repetition. An overlap only counts when it ends on
+    a word boundary in the incoming cue AND is either ≥5 chars or the whole
+    cue (the exact-duplicate case). The search window is capped so a
+    pathological cue cannot go quadratic; real rolling windows are ~100 chars.
     """
+    MIN_OVERLAP = 5
+    MAX_WINDOW = 400
     acc = ""
     for s in texts:
         s = " ".join(s.split())
         if not s:
             continue
         best = 0
-        m = min(len(acc), len(s))
+        m = min(len(acc), len(s), MAX_WINDOW)
         for k in range(m, 0, -1):
-            if acc[-k:] == s[:k]:
+            if (
+                acc[-k:] == s[:k]
+                and (k == len(s) or s[k] == " ")
+                and (k >= MIN_OVERLAP or k == len(s))
+            ):
                 best = k
                 break
         new = s[best:]
@@ -4372,9 +4409,14 @@ def cmd_rescore(args: argparse.Namespace) -> None:
 
     title = meta.get("title", workdir.name)
     source = meta.get("source", old_summary.get("source", ""))
+    resolution = meta.get("resolution")
+    if not resolution and (workdir / "source.mp4").exists():
+        # pre-v0.4.1 residues never recorded resolution; the upgrade path
+        # should measure it rather than stamp "unmeasured" forever
+        resolution = video_resolution(workdir / "source.mp4")
     summary = build_summary(
         title, source, interval, words, motion,
-        resolution=meta.get("resolution"),
+        resolution=resolution,
     )
     if not any(m.get("shape") for m in motion):
         summary["rescore_note"] = (
@@ -4662,6 +4704,7 @@ def main() -> None:
             help="include residue from glances/beat_*/seen.jsonl",
         )
         args = ap.parse_args(sys.argv[2:])
+        check_ingest_complete(args.workdir)
         cmd_seen(args)
         return
 
