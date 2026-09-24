@@ -655,6 +655,27 @@ def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
             if candidates:
                 candidates[0].rename(video)
 
+    # Captions fallback (Isaac, 2026-09-23): YouTube's default yt-dlp clients now
+    # withhold auto-captions without a PO token ("Automatic captions for 1
+    # languages are missing") while the android client still serves them. If the
+    # video came down but no English track did, ask once more through android,
+    # subtitles only. Non-fatal: a miss here leaves WORDS empty, as before.
+    if str(url).startswith(("http://", "https://")) and not (
+        list(workdir.glob("*.en.srt")) or list(workdir.glob("*.en.vtt"))
+    ):
+        try:
+            run([
+                "yt-dlp", "--no-update", "--skip-download",
+                "--write-subs", "--write-auto-subs",
+                "--sub-langs", "en", "--sub-format", "srt/vtt",
+                "--extractor-args", "youtube:player_client=android",
+                "-o", str(base) + ".%(ext)s",
+                url,
+            ])
+        except subprocess.CalledProcessError:
+            print("perceive: captions fallback (android client) found nothing either",
+                  file=sys.stderr)
+
     srt = workdir / "source.en.srt"
     if not srt.exists():
         for p in workdir.glob("*.en.srt"):
