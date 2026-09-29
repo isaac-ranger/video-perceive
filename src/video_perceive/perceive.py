@@ -629,7 +629,13 @@ def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
         try:
             run([
                 "yt-dlp", "--no-update",
-                "-f", "best[height<=720]/best",
+                # YouTube stopped serving muxed streams under 720p (found by pi,
+                # 2026-09-02, board #5671): a bare best[height<=720] now fails with
+                # "Requested format is not available". Ask for split streams first
+                # and merge; the muxed forms stay as fallbacks for sites that serve
+                # them.
+                "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "--merge-output-format", "mp4",
                 "--write-subs", "--write-auto-subs",
                 "--sub-langs", "en", "--sub-format", "srt/vtt",
                 "-o", str(base) + ".%(ext)s",
