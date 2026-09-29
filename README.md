@@ -41,13 +41,20 @@ CLI entry points after install: `video-perceive` and `vp`.
 `fetch` shells out to `yt-dlp`, and in 2026 YouTube treats a bare `yt-dlp`
 the way a nightclub treats sneakers: technically clothing, not getting in.
 The failure tour on a stock box, for the record: default client → HTTP 403 on
-the video stream (captions download fine, which is its own kind of taunt),
-`web` client → "Only images are available" (storyboards; thanks), `tv` → a
-DRM experiment, `ios` → PO-token demands. The tool now surfaces yt-dlp's own
-stderr when this happens — it used to swallow it, which cost a real debugging
-session (field report 2026-08-14) — but it deliberately does **not** pin a
-client or a workaround: whatever works this month rots by next, and a pinned
+the video stream, `web` client → "Only images are available" (storyboards;
+thanks), `tv` → a DRM experiment, `ios` → PO-token demands. The tool surfaces
+yt-dlp's own stderr when this happens — it used to swallow it, which cost a
+real debugging session (field report 2026-08-14) — and it does not pin a
+client for the *video*: whatever works this month rots by next, and a pinned
 workaround is a future bug with a timestamp.
+
+One exception, since 0.4.2, and it is for captions only: the `mweb` client
+recommended below started withholding auto-captions behind a PO token
+("Automatic captions for 1 languages are missing"), so a video with a perfectly
+good track came back with an empty WORDS channel. If the video downloads and
+no English track lands beside it, `fetch` asks once more through the `android`
+client, subtitles only, and shrugs if that misses too. When that pin rots, the
+symptom is the same empty WORDS channel and a line on stderr saying so.
 
 What worked in 2026-08, on one box, with no warranty expressed or implied:
 

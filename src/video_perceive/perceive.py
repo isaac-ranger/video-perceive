@@ -615,13 +615,27 @@ def check_ingest_complete(workdir) -> None:
         )
 
 
+_VIDEO_SUFFIXES = {".mp4", ".webm", ".mkv", ".mov"}
+_YTDLP_INTERMEDIATE = re.compile(r"\.(f\d+|temp|part)(\.|$)", re.IGNORECASE)
+
+
+def _finished_video(p: Path) -> bool:
+    """A downloaded video we may adopt: a video suffix and none of yt-dlp's
+    intermediate names. A split-stream download (bestvideo+bestaudio) leaves
+    ``source.f136.mp4`` / ``source.f251.webm`` / ``source.temp.mp4`` behind
+    when it is interrupted or the merge fails; adopting one of those on a
+    re-run would silently ingest a video-only or audio-only file."""
+    return (p.suffix.lower() in _VIDEO_SUFFIXES
+            and p.is_file()
+            and not _YTDLP_INTERMEDIATE.search(p.name))
+
+
 def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
     """Download video + English captions. Returns (video, srt_or_None)."""
     which_or_exit("yt-dlp")
     base = workdir / "source"
     video = workdir / "source.mp4"
-    existing = list(workdir.glob("source.*"))
-    vids = [p for p in existing if p.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov"}]
+    vids = [p for p in workdir.glob("source.*") if _finished_video(p)]
     if vids and not video.exists():
         video = vids[0]
 
@@ -629,11 +643,13 @@ def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
         try:
             run([
                 "yt-dlp", "--no-update",
-                # YouTube stopped serving muxed streams under 720p (found by pi,
-                # 2026-09-02, board #5671): a bare best[height<=720] now fails with
-                # "Requested format is not available". Ask for split streams first
-                # and merge; the muxed forms stay as fallbacks for sites that serve
-                # them.
+                # Some YouTube videos no longer offer a muxed stream at or under
+                # 720p, and a bare best[height<=720] then fails with "Requested
+                # format is not available" (Pi's field find, 2026-09-02). Ask for
+                # split streams first and let yt-dlp merge them; the muxed forms
+                # stay behind as fallbacks for sites that still serve them. Side
+                # effect where both exist: 720p split beats a 360p muxed stream,
+                # so downloads got bigger and frames sharper.
                 "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
                 "--merge-output-format", "mp4",
                 "--write-subs", "--write-auto-subs",
@@ -649,29 +665,32 @@ def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
                 "EJS solver in ~/.config/yt-dlp/config are usually the missing "
                 "half."
             )
-        for p in workdir.glob("source.*"):
-            if p.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov"} and p.name != "source.mp4":
-                p.rename(video)
-                break
         if not video.exists():
-            candidates = [
-                p for p in workdir.iterdir()
-                if p.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov"}
-            ]
+            for p in workdir.glob("source.*"):
+                if _finished_video(p):
+                    p.rename(video)
+                    break
+        if not video.exists():
+            candidates = [p for p in workdir.iterdir() if _finished_video(p)]
             if candidates:
                 candidates[0].rename(video)
 
-    # Captions fallback (Isaac, 2026-09-23): YouTube's default yt-dlp clients now
-    # withhold auto-captions without a PO token ("Automatic captions for 1
-    # languages are missing") while the android client still serves them. If the
-    # video came down but no English track did, ask once more through android,
-    # subtitles only. Non-fatal: a miss here leaves WORDS empty, as before.
+    # Captions fallback (2026-09-23): the mweb client — the one the README's
+    # own config recipe pins — now wants a PO token for auto-captions and
+    # reports "Automatic captions for 1 languages are missing", so a real
+    # track came back as an empty WORDS channel. The android client still
+    # serves the track. If the video came down but no English track did, ask
+    # once more through android, subtitles only; --ignore-no-formats-error so
+    # a client with no usable video format still hands over the captions.
+    # Non-fatal: a miss here leaves WORDS empty, as before. This is the one
+    # pinned client in the tool, and it will rot like the rest — see README.
     if str(url).startswith(("http://", "https://")) and not (
         list(workdir.glob("*.en.srt")) or list(workdir.glob("*.en.vtt"))
     ):
         try:
             run([
                 "yt-dlp", "--no-update", "--skip-download",
+                "--ignore-no-formats-error",
                 "--write-subs", "--write-auto-subs",
                 "--sub-langs", "en", "--sub-format", "srt/vtt",
                 "--extractor-args", "youtube:player_client=android",
@@ -679,8 +698,11 @@ def fetch(url: str, workdir: Path) -> tuple[Path, Path | None]:
                 url,
             ])
         except subprocess.CalledProcessError:
-            print("perceive: captions fallback (android client) found nothing either",
-                  file=sys.stderr)
+            print("perceive: captions fallback (android client) errored; "
+                  "WORDS may be empty", file=sys.stderr)
+        if not (list(workdir.glob("*.en.srt")) or list(workdir.glob("*.en.vtt"))):
+            print("perceive: no English captions from either client; WORDS "
+                  "will be empty", file=sys.stderr)
 
     srt = workdir / "source.en.srt"
     if not srt.exists():
